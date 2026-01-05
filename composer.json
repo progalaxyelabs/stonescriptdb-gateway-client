@@ -1,0 +1,45 @@
+{
+    "name": "progalaxyelabs/stonescriptdb-gateway-client",
+    "description": "HTTP client for StoneScriptDB Gateway - connect any PHP application to PostgreSQL via gateway",
+    "type": "library",
+    "keywords": [
+        "postgresql",
+        "database",
+        "gateway",
+        "client",
+        "http",
+        "multi-tenant",
+        "stonescriptdb"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "ProGalaxy eLabs",
+            "email": "dev@progalaxy.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0|^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "StoneScriptDB\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "StoneScriptDB\\Tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    }
+}
