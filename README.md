@@ -8,8 +8,9 @@ HTTP client for connecting to [StoneScriptDB Gateway](https://github.com/progala
 - 🔌 **Simple HTTP API** - Call PostgreSQL functions over HTTP
 - 🏢 **Multi-Tenant Ready** - Built-in tenant isolation support
 - 📦 **Schema Management** - Register and migrate schemas programmatically
+- 🔐 **Authentication & Authorization** - JWT token validation, membership management, user invitations
 - ⚡ **Production Ready** - Connection pooling, timeout handling, error management
-- 🔍 **Zero Dependencies** - Only requires curl and json extensions
+- 🔍 **Minimal Dependencies** - Only requires curl, json, and firebase/php-jwt
 
 ## Installation
 
@@ -150,6 +151,91 @@ $client->setTimeout(60)              // Request timeout (seconds)
 $result = $client->callFunction('long_running_operation', []);
 ```
 
+## Authentication & Authorization
+
+### JWT Token Validation
+
+Validate JWT tokens issued by the StoneScriptDB Gateway:
+
+```php
+use StoneScriptDB\Auth\TokenValidator;
+use StoneScriptDB\Auth\InvalidTokenException;
+
+$validator = new TokenValidator('http://gateway:9000');
+
+try {
+    $claims = $validator->validateToken($jwtToken);
+
+    echo "User ID: " . $claims->sub . "\n";
+    echo "Email: " . $claims->email . "\n";
+    echo "Tenant ID: " . $claims->tenantId . "\n";
+    echo "Role: " . $claims->role . "\n";
+    echo "Expires: " . date('Y-m-d H:i:s', $claims->exp) . "\n";
+} catch (InvalidTokenException $e) {
+    echo "Invalid token: " . $e->getMessage() . "\n";
+}
+```
+
+### Membership Management
+
+Manage user memberships and roles within tenants:
+
+```php
+use StoneScriptDB\Auth\MembershipClient;
+
+$client = new MembershipClient('http://gateway:9000');
+
+// Get user's memberships
+$memberships = $client->getUserMemberships($identityId, 'myapp', $authToken);
+
+foreach ($memberships as $membership) {
+    echo "Tenant: " . $membership->tenantId . "\n";
+    echo "Role: " . $membership->role . "\n";
+    echo "Status: " . $membership->status . "\n";
+}
+
+// Update a membership role
+$updated = $client->updateMembership($membershipId, [
+    'role' => 'admin'
+], $authToken);
+
+// Suspend a membership
+$client->suspendMembership($membershipId, 'Policy violation', $authToken);
+
+// Reactivate a membership
+$client->reactivateMembership($membershipId, $authToken);
+```
+
+### User Invitations
+
+Invite users to tenants with specific roles:
+
+```php
+use StoneScriptDB\Auth\InvitationClient;
+
+$invitations = new InvitationClient('http://gateway:9000');
+
+// Invite a user
+$invitation = $invitations->inviteUser(
+    email: 'user@example.com',
+    tenantId: 'tenant-123',
+    role: 'member'
+);
+
+echo "Invitation sent to: " . $invitation->email . "\n";
+echo "Token: " . $invitation->token . "\n";
+echo "Expires: " . $invitation->expiresAt . "\n";
+
+// Get invitation details
+$inv = $invitations->getInvitation($invitationId);
+
+// Resend invitation email
+$invitations->resendInvitation($invitationId);
+
+// Cancel invitation
+$invitations->cancelInvitation($invitationId);
+```
+
 ## Integration Examples
 
 ### Laravel
@@ -284,11 +370,67 @@ try {
 }
 ```
 
+### TokenValidator
+
+Validates JWT tokens issued by the gateway.
+
+#### Constructor
+
+```php
+new TokenValidator(string $gateway_url)
+```
+
+#### Methods
+
+- `validateToken(string $jwt): TokenClaims` - Validate JWT and return claims
+- `getPublicKey(): string` - Get cached or fetch gateway's public key
+- `refreshPublicKey(): void` - Force refresh public key from JWKS endpoint
+
+### MembershipClient
+
+Manages user memberships and roles.
+
+#### Constructor
+
+```php
+new MembershipClient(string $gateway_url)
+```
+
+#### Methods
+
+- `getUserMemberships(string $identityId, ?string $platformCode = null, ?string $authToken = null): array` - Get user's memberships
+- `getMembership(string $membershipId, ?string $authToken = null): Membership` - Get single membership
+- `updateMembership(string $membershipId, array $changes, ?string $authToken = null): Membership` - Update membership
+- `suspendMembership(string $membershipId, string $reason, ?string $authToken = null): void` - Suspend membership
+- `reactivateMembership(string $membershipId, ?string $authToken = null): void` - Reactivate membership
+- `setTimeout(int $seconds): self` - Set request timeout
+- `setConnectTimeout(int $seconds): self` - Set connection timeout
+
+### InvitationClient
+
+Handles user invitations to tenants.
+
+#### Constructor
+
+```php
+new InvitationClient(string $gateway_url)
+```
+
+#### Methods
+
+- `inviteUser(string $email, string $tenantId, string $role): Invitation` - Invite user to tenant
+- `getInvitation(string $invitationId): Invitation` - Get invitation details
+- `cancelInvitation(string $invitationId): void` - Cancel pending invitation
+- `resendInvitation(string $invitationId): void` - Resend invitation email
+- `setTimeout(int $seconds): self` - Set request timeout
+- `setConnectTimeout(int $seconds): self` - Set connection timeout
+
 ## Requirements
 
 - PHP 8.1 or higher
 - curl extension
 - json extension
+- firebase/php-jwt ^6.0 (for JWT token validation)
 
 ## Contributing
 

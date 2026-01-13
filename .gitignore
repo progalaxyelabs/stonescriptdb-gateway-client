@@ -23,3 +23,6 @@ phpunit.xml
 
 # Logs
 *.log
+
+# Project metadata
+project-info.yaml

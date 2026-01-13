@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable timeouts with `setTimeout()` and `setConnectTimeout()`
 - Debug logging with `setDebug()`
 - `GatewayException` for error handling
+- **Authentication & Authorization:**
+  - `TokenValidator` class for JWT token validation with JWKS support
+  - `MembershipClient` class for user membership management
+  - `InvitationClient` class for tenant user invitations
+  - `TokenClaims`, `Membership`, and `Invitation` data objects
+  - `InvalidTokenException` for token validation errors
 - Comprehensive README with examples
 - Laravel, CodeIgniter, and vanilla PHP integration examples
 - MIT License
@@ -27,3 +33,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PHP 8.1+
 - curl extension
 - json extension
+- firebase/php-jwt ^6.0
