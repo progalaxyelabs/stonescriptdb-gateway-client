@@ -11,7 +11,7 @@ use Exception;
  * Works with any PHP application (Laravel, CodeIgniter, Symfony, etc.)
  *
  * @package StoneScriptDB
- * @version 1.0.0
+ * @version 1.0.1
  */
 class GatewayClient
 {
@@ -53,6 +53,11 @@ class GatewayClient
     public function callFunction(string $function_name, array $params = []): array
     {
         $url = $this->gateway_url . '/call';
+
+        // Convert associative params to positional array (gateway expects JSON array, not object)
+        if (!empty($params) && !array_is_list($params)) {
+            $params = array_values($params);
+        }
 
         $payload = [
             'platform' => $this->platform,
