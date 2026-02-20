@@ -11,13 +11,14 @@ use Exception;
  * Works with any PHP application (Laravel, CodeIgniter, Symfony, etc.)
  *
  * @package StoneScriptDB
- * @version 1.0.1
+ * @version 2.0.0
  */
 class GatewayClient
 {
     private string $gateway_url;
     private ?string $platform;
     private ?string $tenant_id;
+    private ?string $admin_token;
     private bool $connected = false;
     private ?string $last_error = null;
     private int $timeout = 30;
@@ -30,9 +31,14 @@ class GatewayClient
      * @param string $gateway_url The URL of the gateway service (e.g., http://gateway:9000)
      * @param string|null $platform The platform identifier (e.g., myapp)
      * @param string|null $tenant_id Optional tenant identifier for multi-tenant apps
+     * @param string|null $admin_token Optional admin token for /admin/* endpoints
      */
-    public function __construct(string $gateway_url, ?string $platform = null, ?string $tenant_id = null)
-    {
+    public function __construct(
+        string $gateway_url,
+        ?string $platform = null,
+        ?string $tenant_id = null,
+        ?string $admin_token = null
+    ) {
         if (!extension_loaded('curl')) {
             throw new Exception('GatewayClient requires the curl extension');
         }
@@ -40,6 +46,7 @@ class GatewayClient
         $this->gateway_url = rtrim($gateway_url, '/');
         $this->platform = $platform;
         $this->tenant_id = $tenant_id;
+        $this->admin_token = $admin_token;
     }
 
     /**
@@ -87,7 +94,6 @@ class GatewayClient
             $this->connected = true;
             $this->last_error = null;
 
-            // Log execution time from gateway if available
             if ($this->debug && isset($response['execution_time_ms'])) {
                 error_log(sprintf(
                     '[GatewayClient] Gateway reported execution time: %sms',
@@ -102,36 +108,55 @@ class GatewayClient
         }
     }
 
+    // ─── V2 Platform & Schema Management ─────────────────────────────────────
+
     /**
-     * Register schema with the gateway.
-     * Uploads .tar.gz archive of PostgreSQL schema (migrations, functions, tables).
+     * Register a platform with the gateway (idempotent).
      *
-     * @param string $schema_archive_path Path to .tar.gz schema archive
-     * @param array $options Optional registration options
-     * @return array Gateway response with migration/function counts
+     * POST /platform/register
+     *
+     * @return array Gateway response
      * @throws GatewayException If registration fails
      */
-    public function register(string $schema_archive_path, array $options = []): array
+    public function registerPlatform(): array
+    {
+        $url = $this->gateway_url . '/platform/register';
+
+        $payload = [
+            'platform' => $this->platform,
+        ];
+
+        $response = $this->httpPost($url, $payload);
+        $this->connected = true;
+        $this->last_error = null;
+
+        return $response;
+    }
+
+    /**
+     * Upload a schema archive for a platform.
+     *
+     * POST /platform/{platform}/schema
+     *
+     * @param string $schema_archive_path Path to .tar.gz schema archive
+     * @param string $schema_name Schema version name (e.g., "v1.0", "latest")
+     * @return array Gateway response with schema info (has_tables, has_functions, checksum, etc.)
+     * @throws GatewayException If upload fails
+     */
+    public function uploadSchema(string $schema_archive_path, string $schema_name): array
     {
         if (!file_exists($schema_archive_path)) {
             throw new GatewayException("Schema archive not found: {$schema_archive_path}");
         }
 
-        $url = $this->gateway_url . '/register';
+        $url = $this->gateway_url . '/platform/' . urlencode($this->platform) . '/schema';
         $boundary = uniqid();
         $body = '';
 
-        // Add platform field
+        // Add schema_name field
         $body .= "--{$boundary}\r\n";
-        $body .= "Content-Disposition: form-data; name=\"platform\"\r\n\r\n";
-        $body .= "{$this->platform}\r\n";
-
-        // Add tenant_id if present
-        if ($this->tenant_id) {
-            $body .= "--{$boundary}\r\n";
-            $body .= "Content-Disposition: form-data; name=\"tenant_id\"\r\n\r\n";
-            $body .= "{$this->tenant_id}\r\n";
-        }
+        $body .= "Content-Disposition: form-data; name=\"schema_name\"\r\n\r\n";
+        $body .= "{$schema_name}\r\n";
 
         // Add schema file
         $fileContent = file_get_contents($schema_archive_path);
@@ -142,7 +167,6 @@ class GatewayClient
         $body .= "--{$boundary}--\r\n";
 
         $response = $this->httpPostMultipart($url, $body, $boundary, 60);
-
         $this->connected = true;
         $this->last_error = null;
 
@@ -150,52 +174,90 @@ class GatewayClient
     }
 
     /**
-     * Migrate schema to the gateway (hot update).
-     * Similar to register but uses /migrate endpoint.
+     * Create a database from a stored schema.
      *
-     * @param string $schema_archive_path Path to .tar.gz schema archive
-     * @param array $options Optional migration options (e.g., tenant_id)
-     * @return array Gateway response with databases updated
-     * @throws GatewayException If migration fails
+     * POST /admin/database/create
+     * Requires ADMIN_TOKEN.
+     *
+     * @param string $schema_name Schema version to deploy
+     * @param string $database_id Database identifier ("main" or tenant ID)
+     * @return array Gateway response with deployment details
+     * @throws GatewayException If creation fails
      */
-    public function migrate(string $schema_archive_path, array $options = []): array
+    public function createDatabase(string $schema_name, string $database_id): array
     {
-        if (!file_exists($schema_archive_path)) {
-            throw new GatewayException("Schema archive not found: {$schema_archive_path}");
-        }
+        $url = $this->gateway_url . '/admin/database/create';
 
-        $url = $this->gateway_url . '/migrate';
-        $boundary = uniqid();
-        $body = '';
+        $payload = [
+            'platform' => $this->platform,
+            'schema_name' => $schema_name,
+            'database_id' => $database_id,
+        ];
 
-        // Add platform field
-        $body .= "--{$boundary}\r\n";
-        $body .= "Content-Disposition: form-data; name=\"platform\"\r\n\r\n";
-        $body .= "{$this->platform}\r\n";
-
-        // Add tenant_id if present (from options or instance property)
-        $tenant_id = $options['tenant_id'] ?? $this->tenant_id;
-        if ($tenant_id) {
-            $body .= "--{$boundary}\r\n";
-            $body .= "Content-Disposition: form-data; name=\"tenant_id\"\r\n\r\n";
-            $body .= "{$tenant_id}\r\n";
-        }
-
-        // Add schema file
-        $fileContent = file_get_contents($schema_archive_path);
-        $body .= "--{$boundary}\r\n";
-        $body .= "Content-Disposition: form-data; name=\"schema\"; filename=\"postgresql.tar.gz\"\r\n";
-        $body .= "Content-Type: application/gzip\r\n\r\n";
-        $body .= $fileContent . "\r\n";
-        $body .= "--{$boundary}--\r\n";
-
-        $response = $this->httpPostMultipart($url, $body, $boundary, 120);
-
+        $response = $this->httpPost($url, $payload, true);
         $this->connected = true;
         $this->last_error = null;
 
         return $response;
     }
+
+    /**
+     * Migrate a single database using a stored schema.
+     *
+     * POST /v2/migrate
+     *
+     * @param string $schema_name Schema version to migrate to
+     * @param string $database_id Database identifier ("main" or tenant ID)
+     * @param bool $force Bypass DATALOSS safety checks
+     * @return array Gateway response with migration details
+     * @throws GatewayException If migration fails
+     */
+    public function migrateV2(string $schema_name, string $database_id, bool $force = false): array
+    {
+        $url = $this->gateway_url . '/v2/migrate';
+
+        $payload = [
+            'platform' => $this->platform,
+            'schema_name' => $schema_name,
+            'database_id' => $database_id,
+            'force' => $force,
+        ];
+
+        $response = $this->httpPost($url, $payload, false, 120);
+        $this->connected = true;
+        $this->last_error = null;
+
+        return $response;
+    }
+
+    /**
+     * Migrate all databases for a platform using a stored schema.
+     *
+     * POST /v2/migrate-all
+     *
+     * @param string $schema_name Schema version to migrate to
+     * @param bool $force Bypass DATALOSS safety checks
+     * @return array Gateway response with per-database results
+     * @throws GatewayException If migration fails
+     */
+    public function migrateAllV2(string $schema_name, bool $force = false): array
+    {
+        $url = $this->gateway_url . '/v2/migrate-all';
+
+        $payload = [
+            'platform' => $this->platform,
+            'schema_name' => $schema_name,
+            'force' => $force,
+        ];
+
+        $response = $this->httpPost($url, $payload, false, 300);
+        $this->connected = true;
+        $this->last_error = null;
+
+        return $response;
+    }
+
+    // ─── Health & Status ─────────────────────────────────────────────────────
 
     /**
      * Check if the gateway is reachable.
@@ -243,6 +305,8 @@ class GatewayClient
         return $this->last_error;
     }
 
+    // ─── Configuration ───────────────────────────────────────────────────────
+
     /**
      * Set the tenant ID for subsequent requests.
      *
@@ -288,6 +352,18 @@ class GatewayClient
     }
 
     /**
+     * Set the admin token for /admin/* endpoints.
+     *
+     * @param string|null $token Admin authentication token
+     * @return self For method chaining
+     */
+    public function setAdminToken(?string $token): self
+    {
+        $this->admin_token = $token;
+        return $this;
+    }
+
+    /**
      * Set request timeout in seconds.
      *
      * @param int $timeout Timeout in seconds
@@ -323,15 +399,19 @@ class GatewayClient
         return $this;
     }
 
+    // ─── HTTP Transport ──────────────────────────────────────────────────────
+
     /**
      * Perform an HTTP POST request to the gateway (JSON).
      *
      * @param string $url The URL to post to
      * @param array $data The data to send as JSON
+     * @param bool $with_admin_auth Include admin token in Authorization header
+     * @param int|null $timeout Override timeout for this request
      * @return array The decoded JSON response
      * @throws GatewayException If the request fails
      */
-    private function httpPost(string $url, array $data): array
+    private function httpPost(string $url, array $data, bool $with_admin_auth = false, ?int $timeout = null): array
     {
         $json_payload = json_encode($data);
 
@@ -345,16 +425,22 @@ class GatewayClient
             throw new GatewayException('Failed to initialize curl');
         }
 
+        $headers = [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'Content-Length: ' . strlen($json_payload)
+        ];
+
+        if ($with_admin_auth && $this->admin_token) {
+            $headers[] = 'Authorization: Bearer ' . $this->admin_token;
+        }
+
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $json_payload,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'Content-Length: ' . strlen($json_payload)
-            ],
-            CURLOPT_TIMEOUT => $this->timeout,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => $timeout ?? $this->timeout,
             CURLOPT_CONNECTTIMEOUT => $this->connect_timeout
         ]);
 
@@ -372,11 +458,13 @@ class GatewayClient
         if ($http_code !== 200) {
             $error_message = "Gateway returned HTTP $http_code";
 
-            // Try to extract error message from response
             if ($response !== false && !empty($response)) {
                 $error_body = json_decode($response, true);
                 if (is_array($error_body) && isset($error_body['error'])) {
                     $error_message .= ': ' . $error_body['error'];
+                }
+                if (is_array($error_body) && isset($error_body['message'])) {
+                    $error_message .= ' - ' . $error_body['message'];
                 }
             }
 
@@ -444,6 +532,9 @@ class GatewayClient
                 $error_body = json_decode($response, true);
                 if (is_array($error_body) && isset($error_body['error'])) {
                     $error_message .= ': ' . $error_body['error'];
+                }
+                if (is_array($error_body) && isset($error_body['message'])) {
+                    $error_message .= ' - ' . $error_body['message'];
                 }
             }
 
