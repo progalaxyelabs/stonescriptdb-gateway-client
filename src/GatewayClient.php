@@ -457,6 +457,7 @@ class GatewayClient
 
         if ($http_code !== 200) {
             $error_message = "Gateway returned HTTP $http_code";
+            $error_body = null;
 
             if ($response !== false && !empty($response)) {
                 $error_body = json_decode($response, true);
@@ -466,9 +467,13 @@ class GatewayClient
                 if (is_array($error_body) && isset($error_body['message'])) {
                     $error_message .= ' - ' . $error_body['message'];
                 }
+                // Include cause in the message for backward compatibility with str_contains() checks
+                if (is_array($error_body) && isset($error_body['cause'])) {
+                    $error_message .= ' (Cause: ' . $error_body['cause'] . ')';
+                }
             }
 
-            throw new GatewayException($error_message, $http_code);
+            throw new GatewayException($error_message, $http_code, null, $error_body);
         }
 
         if ($response === false || $response === '') {
@@ -527,6 +532,7 @@ class GatewayClient
 
         if ($http_code !== 200) {
             $error_message = "Gateway returned HTTP $http_code";
+            $error_body = null;
 
             if ($response !== false && !empty($response)) {
                 $error_body = json_decode($response, true);
@@ -536,9 +542,13 @@ class GatewayClient
                 if (is_array($error_body) && isset($error_body['message'])) {
                     $error_message .= ' - ' . $error_body['message'];
                 }
+                // Include cause in the message for backward compatibility with str_contains() checks
+                if (is_array($error_body) && isset($error_body['cause'])) {
+                    $error_message .= ' (Cause: ' . $error_body['cause'] . ')';
+                }
             }
 
-            throw new GatewayException($error_message, $http_code);
+            throw new GatewayException($error_message, $http_code, null, $error_body);
         }
 
         if ($response === false || $response === '') {
