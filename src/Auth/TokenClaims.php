@@ -20,7 +20,7 @@ class TokenClaims
         return new self(
             identity_id: $payload['identity_id'] ?? throw new \InvalidArgumentException('Missing identity_id claim'),
             tenant_id: $payload['tenant_id'] ?? throw new \InvalidArgumentException('Missing tenant_id claim'),
-            tenant_slug: $payload['tenant_slug'] ?? throw new \InvalidArgumentException('Missing tenant_slug claim'),
+            tenant_slug: $payload['tenant_slug'] ?? '',  // Optional — not all platforms use subdomain routing
             platform_code: $payload['platform_code'] ?? throw new \InvalidArgumentException('Missing platform_code claim'),
             role: $payload['role'] ?? throw new \InvalidArgumentException('Missing role claim'),
             local_user_id: $payload['local_user_id'] ?? null,
