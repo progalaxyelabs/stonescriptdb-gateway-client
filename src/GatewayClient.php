@@ -11,13 +11,15 @@ use Exception;
  * Works with any PHP application (Laravel, CodeIgniter, Symfony, etc.)
  *
  * @package StoneScriptDB
- * @version 2.0.0
+ * @version 3.0.0
  */
 class GatewayClient
 {
     private string $gateway_url;
     private ?string $platform;
-    private ?string $tenant_id;
+    private ?string $schema_name;
+    private ?string $uuid;
+    private ?string $base_schema_name;
     private ?string $admin_token;
     private bool $connected = false;
     private ?string $last_error = null;
@@ -30,13 +32,15 @@ class GatewayClient
      *
      * @param string $gateway_url The URL of the gateway service (e.g., http://gateway:9000)
      * @param string|null $platform The platform identifier (e.g., myapp)
-     * @param string|null $tenant_id Optional tenant identifier for multi-tenant apps
+     * @param string|null $schema_name Base schema name (e.g. "main"); null defaults to "main"
+     * @param string|null $uuid Tenant UUID for tenant databases; null for the base schema
      * @param string|null $admin_token Optional admin token for /admin/* endpoints
      */
     public function __construct(
         string $gateway_url,
         ?string $platform = null,
-        ?string $tenant_id = null,
+        ?string $schema_name = null,
+        ?string $uuid = null,
         ?string $admin_token = null
     ) {
         if (!extension_loaded('curl')) {
@@ -45,7 +49,9 @@ class GatewayClient
 
         $this->gateway_url = rtrim($gateway_url, '/');
         $this->platform = $platform;
-        $this->tenant_id = $tenant_id;
+        $this->base_schema_name = $schema_name ?? 'main';
+        $this->schema_name = $this->base_schema_name;
+        $this->uuid = $uuid;
         $this->admin_token = $admin_token;
     }
 
@@ -68,7 +74,8 @@ class GatewayClient
 
         $payload = [
             'platform' => $this->platform,
-            'tenant_id' => $this->tenant_id,
+            'schema_name' => $this->schema_name,
+            'uuid' => $this->uuid,
             'function' => $function_name,
             'params' => $params
         ];
@@ -308,25 +315,82 @@ class GatewayClient
     // ─── Configuration ───────────────────────────────────────────────────────
 
     /**
-     * Set the tenant ID for subsequent requests.
+     * Route subsequent requests to a tenant database.
      *
-     * @param string|null $tenant_id The tenant identifier
+     * Called by GatewayTenantMiddleware / StoreAccessMiddleware with the user's
+     * tenant UUID. Passing null resets routing back to the base schema (main DB).
+     *
+     * Gateway v4 routing (see SPEC):
+     *   - null  → schema_name = base ("main"), uuid = null  → {platform}_main
+     *   - $uuid → schema_name = "tenant", uuid = $uuid       → {platform}_tenant_{uuid}
+     *
+     * @param string|null $tenant_id Tenant UUID, or null to reset to the base schema
      * @return self For method chaining
      */
     public function setTenantId(?string $tenant_id): self
     {
-        $this->tenant_id = $tenant_id;
+        if ($tenant_id === null) {
+            $this->schema_name = $this->base_schema_name;
+            $this->uuid = null;
+        } else {
+            $this->schema_name = 'tenant';
+            $this->uuid = $tenant_id;
+        }
         return $this;
     }
 
     /**
-     * Get the current tenant ID.
+     * Get the current tenant UUID (null when on the base/main database).
      *
-     * @return string|null The current tenant identifier
+     * @return string|null The current tenant UUID
      */
     public function getTenantId(): ?string
     {
-        return $this->tenant_id;
+        return $this->uuid;
+    }
+
+    /**
+     * Set the schema name for subsequent requests.
+     *
+     * @param string|null $schema_name Schema name (e.g. "main", "tenant")
+     * @return self For method chaining
+     */
+    public function setSchemaName(?string $schema_name): self
+    {
+        $this->schema_name = $schema_name;
+        return $this;
+    }
+
+    /**
+     * Get the current schema name.
+     *
+     * @return string|null The current schema name
+     */
+    public function getSchemaName(): ?string
+    {
+        return $this->schema_name;
+    }
+
+    /**
+     * Set the UUID for tenant database routing.
+     *
+     * @param string|null $uuid Tenant UUID; null for the base/main database
+     * @return self For method chaining
+     */
+    public function setUuid(?string $uuid): self
+    {
+        $this->uuid = $uuid;
+        return $this;
+    }
+
+    /**
+     * Get the current UUID.
+     *
+     * @return string|null The current UUID
+     */
+    public function getUuid(): ?string
+    {
+        return $this->uuid;
     }
 
     /**
