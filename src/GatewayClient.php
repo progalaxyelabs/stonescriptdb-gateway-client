@@ -20,6 +20,7 @@ class GatewayClient
     private ?string $schema_name;
     private ?string $uuid;
     private ?string $base_schema_name;
+    private ?string $tenant_schema_name;
     private ?string $admin_token;
     private bool $connected = false;
     private ?string $last_error = null;
@@ -32,7 +33,8 @@ class GatewayClient
      *
      * @param string $gateway_url The URL of the gateway service (e.g., http://gateway:9000)
      * @param string|null $platform The platform identifier (e.g., myapp)
-     * @param string|null $schema_name Base schema name (e.g. "main"); null defaults to "main"
+     * @param string $schema_name Main schema name (e.g. "main"). Required — no default.
+     * @param string|null $tenant_schema_name Tenant schema name (e.g. "tenant"). Required only for multi-tenant platforms.
      * @param string|null $uuid Tenant UUID for tenant databases; null for the base schema
      * @param string|null $admin_token Optional admin token for /admin/* endpoints
      */
@@ -40,6 +42,7 @@ class GatewayClient
         string $gateway_url,
         ?string $platform = null,
         ?string $schema_name = null,
+        ?string $tenant_schema_name = null,
         ?string $uuid = null,
         ?string $admin_token = null
     ) {
@@ -47,10 +50,18 @@ class GatewayClient
             throw new Exception('GatewayClient requires the curl extension');
         }
 
+        if (empty($schema_name)) {
+            throw new Exception(
+                'GatewayClient: schema_name is required. ' .
+                'Set DB_GATEWAY_SCHEMA_NAME in your .env file (e.g. DB_GATEWAY_SCHEMA_NAME=main).'
+            );
+        }
+
         $this->gateway_url = rtrim($gateway_url, '/');
         $this->platform = $platform;
-        $this->base_schema_name = $schema_name ?? 'main';
+        $this->base_schema_name = $schema_name;
         $this->schema_name = $this->base_schema_name;
+        $this->tenant_schema_name = $tenant_schema_name;
         $this->uuid = $uuid;
         $this->admin_token = $admin_token;
     }
@@ -321,11 +332,12 @@ class GatewayClient
      * tenant UUID. Passing null resets routing back to the base schema (main DB).
      *
      * Gateway v4 routing (see SPEC):
-     *   - null  → schema_name = base ("main"), uuid = null  → {platform}_main
-     *   - $uuid → schema_name = "tenant", uuid = $uuid       → {platform}_tenant_{uuid}
+     *   - null  → schema_name = base_schema_name, uuid = null  → {platform}_{main_schema}
+     *   - $uuid → schema_name = tenant_schema_name, uuid = $uuid → {platform}_{tenant_schema}_{uuid}
      *
      * @param string|null $tenant_id Tenant UUID, or null to reset to the base schema
      * @return self For method chaining
+     * @throws Exception If routing to a tenant and DB_GATEWAY_TENANT_SCHEMA_NAME is not configured
      */
     public function setTenantId(?string $tenant_id): self
     {
@@ -333,7 +345,13 @@ class GatewayClient
             $this->schema_name = $this->base_schema_name;
             $this->uuid = null;
         } else {
-            $this->schema_name = 'tenant';
+            if (empty($this->tenant_schema_name)) {
+                throw new Exception(
+                    'DB_GATEWAY_TENANT_SCHEMA_NAME is required for multi-tenant routing. ' .
+                    'Add it to your .env file (e.g. DB_GATEWAY_TENANT_SCHEMA_NAME=tenant).'
+                );
+            }
+            $this->schema_name = $this->tenant_schema_name;
             $this->uuid = $tenant_id;
         }
         return $this;
