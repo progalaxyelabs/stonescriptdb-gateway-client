@@ -197,20 +197,25 @@ class GatewayClient
      * POST /admin/database/create
      * Requires ADMIN_TOKEN.
      *
+     * IMPORTANT (regression guard, task #3165): the gateway's Rust
+     * CreateDatabaseRequest struct (stonescriptdb-gateway src/api/database.rs)
+     * only deserializes a `uuid` field — it has no `database_id` field. This
+     * method used to send `database_id`, which serde silently dropped (no
+     * deny_unknown_fields at the time), leaving uuid=None on every call. Every
+     * tenant then collapsed onto the shared `{platform}_{schema_name}` base
+     * database instead of getting its own `{platform}_{schema_name}_{uuid}`
+     * database ("ghost tenants" — active tenant rows with no real per-tenant
+     * DB). Always send `uuid`, never `database_id`.
+     *
      * @param string $schema_name Schema version to deploy
-     * @param string $database_id Database identifier ("main" or tenant ID)
+     * @param string $uuid Database identifier ("main" or tenant UUID)
      * @return array Gateway response with deployment details
      * @throws GatewayException If creation fails
      */
-    public function createDatabase(string $schema_name, string $database_id): array
+    public function createDatabase(string $schema_name, string $uuid): array
     {
         $url = $this->gateway_url . '/admin/database/create';
-
-        $payload = [
-            'platform' => $this->platform,
-            'schema_name' => $schema_name,
-            'database_id' => $database_id,
-        ];
+        $payload = $this->buildCreateDatabasePayload($schema_name, $uuid);
 
         $response = $this->httpPost($url, $payload, true);
         $this->connected = true;
@@ -220,32 +225,60 @@ class GatewayClient
     }
 
     /**
+     * Build the /admin/database/create payload. Extracted (protected) so unit
+     * tests can assert on the exact outgoing payload shape (regression guard
+     * for task #3165) without a live gateway.
+     */
+    protected function buildCreateDatabasePayload(string $schema_name, string $uuid): array
+    {
+        return [
+            'platform' => $this->platform,
+            'schema_name' => $schema_name,
+            'uuid' => $uuid,
+        ];
+    }
+
+    /**
      * Migrate a single database using a stored schema.
      *
      * POST /v2/migrate
      *
+     * IMPORTANT (regression guard, task #3165): same contract as
+     * createDatabase() above — the gateway's MigrateRequest struct
+     * (stonescriptdb-gateway src/api/migrate.rs) only deserializes `uuid`, not
+     * `database_id`. Always send `uuid`.
+     *
      * @param string $schema_name Schema version to migrate to
-     * @param string $database_id Database identifier ("main" or tenant ID)
+     * @param string $uuid Database identifier ("main" or tenant UUID)
      * @param bool $force Bypass DATALOSS safety checks
      * @return array Gateway response with migration details
      * @throws GatewayException If migration fails
      */
-    public function migrateV2(string $schema_name, string $database_id, bool $force = false): array
+    public function migrateV2(string $schema_name, string $uuid, bool $force = false): array
     {
         $url = $this->gateway_url . '/v2/migrate';
-
-        $payload = [
-            'platform' => $this->platform,
-            'schema_name' => $schema_name,
-            'database_id' => $database_id,
-            'force' => $force,
-        ];
+        $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force);
 
         $response = $this->httpPost($url, $payload, false, 120);
         $this->connected = true;
         $this->last_error = null;
 
         return $response;
+    }
+
+    /**
+     * Build the /v2/migrate payload. Extracted (protected) so unit tests can
+     * assert on the exact outgoing payload shape (regression guard for task
+     * #3165) without a live gateway.
+     */
+    protected function buildMigrateV2Payload(string $schema_name, string $uuid, bool $force): array
+    {
+        return [
+            'platform' => $this->platform,
+            'schema_name' => $schema_name,
+            'uuid' => $uuid,
+            'force' => $force,
+        ];
     }
 
     /**
