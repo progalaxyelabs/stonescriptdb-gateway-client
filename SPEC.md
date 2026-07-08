@@ -54,10 +54,18 @@ All communication is plain HTTP (internal network only — never exposed to the 
 | Charset | UTF-8 |
 | Default timeout | 30 s request, 10 s connect |
 
-The gateway URL is configured at construction time:
+The gateway URL is configured at construction time. `schema_name` is required
+(throws if empty) — it is the "main" schema label for this platform
+(e.g. `DB_GATEWAY_SCHEMA_NAME=main`), distinct from `tenant_schema_name` which is
+only required if the platform is multi-tenant:
 
 ```php
-$client = new GatewayClient('http://gateway:9000', 'myplatform');
+$client = new GatewayClient(
+    gateway_url: 'http://gateway:9000',
+    platform: 'myplatform',
+    schema_name: 'main',
+    tenant_schema_name: 'tenant',   // omit for single-tenant platforms
+);
 ```
 
 ---
@@ -68,23 +76,32 @@ $client = new GatewayClient('http://gateway:9000', 'myplatform');
 
 The primary data path. Calls a named PostgreSQL function and returns its result rows.
 
-**Request**
+**Request** (gateway v4 routing — `schema_name` + `uuid`, not `tenant_id`; see
+`GatewayClient::callFunction()` / `setTenantId()` in `src/GatewayClient.php`)
 
 ```json
 {
-  "platform":  "myplatform",
-  "tenant_id": "tenant-uuid-or-null",
-  "function":  "get_users",
-  "params":    ["value1", 42, null]
+  "platform":    "myplatform",
+  "schema_name": "main",
+  "uuid":        null,
+  "function":    "get_users",
+  "params":      ["value1", 42, null]
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `platform` | string | yes | Platform identifier (determines which PostgreSQL database) |
-| `tenant_id` | string \| null | no | Tenant UUID for multi-tenant databases; omit for the shared/main database |
+| `schema_name` | string \| null | yes | `base_schema_name` (e.g. `"main"`) for the shared database, or `tenant_schema_name` (e.g. `"tenant"`) when routed to a tenant — set automatically by `setTenantId()` |
+| `uuid` | string \| null | yes | `null` while on the base schema; the tenant UUID once `setTenantId($uuid)` has been called |
 | `function` | string | yes | PostgreSQL function name (lowercase, underscores only, max 63 chars) |
 | `params` | JSON array | yes | Positional parameter list; can be empty (`[]`) |
+
+Calling `$client->setTenantId($uuid)` swaps `schema_name` from the base schema to
+the configured tenant schema and sets `uuid = $uuid` for every subsequent `/call`
+on that client instance; `setTenantId(null)` resets both back to the base schema.
+This superseded an older (`pre-v3.0.0`) `tenant_id`-only payload — do not use
+`tenant_id` as a field name when integrating against this client's current version.
 
 Function name rules (enforced by gateway, not the PHP client):
 - Characters: `[a-z0-9_]` only
@@ -454,24 +471,43 @@ All gateway errors return JSON in this shape:
 | 503 | `connection_failed` | Cannot connect to PostgreSQL |
 | 503 | `pool_exhausted` | All connections in the pool are in use |
 
-The PHP `GatewayException` carries the HTTP status code as its `$code` and the
-human-readable message as `$message`. The raw `error` code and `cause` are not
-currently surfaced as separate fields on the exception — callers inspect
-`getMessage()` for the combined error string.
+The PHP `GatewayException` carries the HTTP status code as its `$code`, the
+combined human-readable message as `$message` (via `getMessage()`), **and** the
+raw gateway error body as separate structured accessors (`src/GatewayException.php`):
+
+- `getGatewayError(): ?string` — the machine-readable `error` code (e.g. `"query_failed"`)
+- `getCause(): ?string` — the raw PostgreSQL error/detail text (e.g. a business-rule `RAISE EXCEPTION` message)
+- `getDatabase(): ?string` — the database name involved, if present
+
+```php
+try {
+    $client->callFunction('risky_operation', [$amount]);
+} catch (GatewayException $e) {
+    error_log($e->getGatewayError() . ': ' . $e->getCause());
+}
+```
+
+Callers that only need the combined string can still use `getMessage()`, which
+includes the `error`/`message`/`cause` fields concatenated for backward
+compatibility with older `str_contains()`-based error checks.
 
 ---
 
 ## 6. Multi-Tenant Database Routing
 
-The gateway resolves the target PostgreSQL database from `platform` + `tenant_id`:
+The gateway resolves the target PostgreSQL database from `platform` + `schema_name` + `uuid`
+(gateway v4 routing model — see `GatewayClient::setTenantId()` in `src/GatewayClient.php`):
 
-| `tenant_id` | Database name |
-|---|---|
-| `null` / omitted | `{platform}_main` |
-| `"some-tenant-uuid"` | `{platform}_{tenant_id}` |
+| `schema_name` | `uuid` | Database resolved |
+|---|---|---|
+| base schema (e.g. `"main"`) | `null` | `{platform}_{base_schema_name}` |
+| tenant schema (e.g. `"tenant"`) | tenant UUID | `{platform}_{tenant_schema_name}_{uuid}` |
 
-The PHP client sets `$tenant_id` at construction or via `setTenantId()`. It is
-included in every `/call` request automatically.
+The PHP client is constructed with `schema_name` (required) and, for multi-tenant
+platforms, `tenant_schema_name`. Calling `$client->setTenantId($uuid)` switches
+`schema_name`/`uuid` from the base pair to the tenant pair for every subsequent
+`/call`; `setTenantId(null)` resets back to the base schema. Both fields are sent
+on every `/call` request automatically — there is no separate `tenant_id` field.
 
 ---
 

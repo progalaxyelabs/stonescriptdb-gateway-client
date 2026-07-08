@@ -27,10 +27,12 @@ require 'vendor/autoload.php';
 
 use StoneScriptDB\GatewayClient;
 
-// Connect to gateway
+// Connect to gateway. `schema_name` is required — it's your platform's main
+// schema label (e.g. "main"); throws if omitted.
 $client = new GatewayClient(
     gateway_url: 'http://localhost:9000',
-    platform: 'myapp'
+    platform: 'myapp',
+    schema_name: 'main'
 );
 
 // Call a PostgreSQL function
@@ -50,7 +52,7 @@ foreach ($users as $user) {
 ```php
 use StoneScriptDB\GatewayClient;
 
-$client = new GatewayClient('http://gateway:9000', 'myapp');
+$client = new GatewayClient('http://gateway:9000', 'myapp', schema_name: 'main');
 
 // Simple function call
 $result = $client->callFunction('get_product', [
@@ -67,39 +69,62 @@ $orders = $client->callFunction('search_orders', [
 
 ### Multi-Tenant Applications
 
+Multi-tenant routing is `schema_name` + `uuid` (gateway v4), not a `tenant_id`
+constructor arg. Pass `tenant_schema_name` at construction time (the schema label
+used for *every* tenant, e.g. `"tenant"`), then switch the active tenant with
+`setTenantId($uuid)`:
+
 ```php
 $client = new GatewayClient(
     gateway_url: 'http://gateway:9000',
     platform: 'saas-platform',
-    tenant_id: 'acme-corp'
+    schema_name: 'main',            // used when no tenant is selected
+    tenant_schema_name: 'tenant'     // used once setTenantId() is called
 );
 
-// All calls use tenant_id automatically
+// Route subsequent calls to a specific tenant database
+$client->setTenantId('11111111-1111-1111-1111-111111111111');
 $data = $client->callFunction('get_tenant_data', []);
 
 // Switch tenant dynamically
-$client->setTenantId('globex-inc');
+$client->setTenantId('22222222-2222-2222-2222-222222222222');
 $data = $client->callFunction('get_tenant_data', []);
+
+// Reset back to the base/main database
+$client->setTenantId(null);
 ```
 
 ### Schema Registration
 
+Schema registration is a two-step upload-then-migrate flow — there is no single
+`register()` method:
+
 ```php
-$client = new GatewayClient('http://gateway:9000', 'myapp');
+$client = new GatewayClient('http://gateway:9000', 'myapp', schema_name: 'main');
 
-// Register schema on deployment
-$response = $client->register('/path/to/schema.tar.gz');
+// 1. Upload the schema archive (tables/functions/migrations tar.gz)
+$upload = $client->uploadSchema('/path/to/schema.tar.gz', 'v1.0');
+echo "Functions in archive: " . ($upload['has_functions'] ? 'yes' : 'no') . "\n";
 
-echo "Migrations applied: " . $response['migrations_applied'] . "\n";
-echo "Functions deployed: " . $response['functions_deployed'] . "\n";
+// 2. Create the database from that stored schema (requires an admin token —
+//    see setAdminToken() below)
+$client->setAdminToken(getenv('GATEWAY_ADMIN_TOKEN'));
+$created = $client->createDatabase('v1.0', 'main');
+echo "Functions deployed: " . $created['functions_deployed'] . "\n";
 ```
 
 ### Hot Schema Migration
 
-```php
-// Update running production schema
-$response = $client->migrate('/path/to/schema.tar.gz');
+Migration is `migrateV2()` (single database) or `migrateAllV2()` (every tenant) —
+there is no single `migrate()` method:
 
+```php
+// Migrate the main database to an already-uploaded schema version
+$response = $client->migrateV2('v1.0', 'main', force: false);
+echo "Migrations applied: " . $response['migrations_applied'] . "\n";
+
+// Or migrate every tenant database at once
+$response = $client->migrateAllV2('v1.0', force: false);
 echo "Databases updated: " . count($response['databases_updated']) . "\n";
 ```
 
@@ -161,15 +186,18 @@ Validate JWT tokens issued by the ProGalaxy Auth Service (or StoneScriptDB Gatew
 use StoneScriptDB\Auth\TokenValidator;
 use StoneScriptDB\Auth\InvalidTokenException;
 
-// Validate tokens from auth service
+// Constructor takes the base URL whose /auth/jwks endpoint should be used to
+// verify the token's signature — this may be the gateway itself or a central
+// auth service, whichever issued the token.
 $validator = new TokenValidator('http://auth-service:3139');
 
 try {
     $claims = $validator->validateToken($jwtToken);
 
-    echo "User ID: " . $claims->sub . "\n";
-    echo "Email: " . $claims->email . "\n";
-    echo "Tenant ID: " . $claims->tenantId . "\n";
+    echo "Identity ID: " . $claims->identity_id . "\n";
+    echo "Tenant ID: " . $claims->tenant_id . "\n";
+    echo "Tenant slug: " . $claims->tenant_slug . "\n";
+    echo "Platform: " . $claims->platform_code . "\n";
     echo "Role: " . $claims->role . "\n";
     echo "Expires: " . date('Y-m-d H:i:s', $claims->exp) . "\n";
 } catch (InvalidTokenException $e) {
@@ -209,7 +237,8 @@ class DatabaseService
     {
         $this->client = new GatewayClient(
             config('database.connections.gateway.url'),
-            config('database.connections.gateway.platform')
+            config('database.connections.gateway.platform'),
+            schema_name: 'main'
         );
     }
 
@@ -241,7 +270,8 @@ class UserModel extends BaseModel
         $config = config('Database')->gateway;
         $this->client = new GatewayClient(
             $config['gateway_url'],
-            $config['platform']
+            $config['platform'],
+            schema_name: 'main'
         );
     }
 
@@ -268,7 +298,7 @@ function getDatabase(): GatewayClient
     static $client = null;
 
     if ($client === null) {
-        $client = new GatewayClient(GATEWAY_URL, PLATFORM);
+        $client = new GatewayClient(GATEWAY_URL, PLATFORM, schema_name: 'main');
     }
 
     return $client;
@@ -286,21 +316,33 @@ $products = $db->callFunction('get_products', ['category' => 'electronics']);
 #### Constructor
 
 ```php
-new GatewayClient(string $gateway_url, ?string $platform = null, ?string $tenant_id = null)
+new GatewayClient(
+    string $gateway_url,
+    ?string $platform = null,
+    ?string $schema_name = null,        // required — throws if empty
+    ?string $tenant_schema_name = null, // required only if you ever call setTenantId()
+    ?string $uuid = null,
+    ?string $admin_token = null
+)
 ```
 
 #### Methods
 
-- `callFunction(string $name, array $params = []): array` - Call PostgreSQL function
-- `register(string $archive_path, array $options = []): array` - Register schema
-- `migrate(string $archive_path, array $options = []): array` - Migrate schema
-- `healthCheck(): bool` - Check gateway health
-- `isConnected(): bool` - Check if connected
+- `callFunction(string $name, array $params = []): array` - Call PostgreSQL function (`POST /call`)
+- `registerPlatform(): array` - Register this platform with the gateway, idempotent (`POST /platform/register`)
+- `uploadSchema(string $archivePath, string $schemaName): array` - Upload a `.tar.gz` schema archive (`POST /platform/{platform}/schema`)
+- `createDatabase(string $schemaName, string $uuid): array` - Create a database from a stored schema; requires an admin token (`POST /admin/database/create`)
+- `migrateV2(string $schemaName, string $uuid, bool $force = false): array` - Migrate one database to a stored schema (`POST /v2/migrate`)
+- `migrateAllV2(string $schemaName, bool $force = false): array` - Migrate every database for the platform (`POST /v2/migrate-all`)
+- `healthCheck(): bool` - Check gateway health (`GET /health`)
+- `isConnected(): bool` - True once at least one request has succeeded
 - `getLastError(): ?string` - Get last error message
-- `setTenantId(?string $id): self` - Set tenant ID
-- `getTenantId(): ?string` - Get tenant ID
-- `setPlatform(?string $platform): self` - Set platform
-- `getPlatform(): ?string` - Get platform
+- `setTenantId(?string $uuid): self` - Route subsequent calls to a tenant database (`null` resets to the base/main schema)
+- `getTenantId(): ?string` - Get the current tenant UUID (alias for `getUuid()`)
+- `setSchemaName(?string $schemaName): self` / `getSchemaName(): ?string` - Get/set the schema name used on the next call
+- `setUuid(?string $uuid): self` / `getUuid(): ?string` - Get/set the UUID used on the next call
+- `setPlatform(?string $platform): self` / `getPlatform(): ?string` - Get/set platform
+- `setAdminToken(?string $token): self` - Set the bearer token used for `/admin/*` endpoints
 - `setTimeout(int $seconds): self` - Set request timeout
 - `setConnectTimeout(int $seconds): self` - Set connection timeout
 - `setDebug(bool $enabled): self` - Enable/disable debug logging
@@ -313,8 +355,11 @@ Thrown when gateway requests fail. Extends `Exception`.
 try {
     $client->callFunction('invalid_function', []);
 } catch (GatewayException $e) {
-    echo $e->getMessage(); // Error description
-    echo $e->getCode();    // HTTP status code (if applicable)
+    echo $e->getMessage();       // Combined human-readable error string
+    echo $e->getCode();          // HTTP status code (if applicable)
+    echo $e->getGatewayError();  // Machine-readable error code, e.g. "query_failed"
+    echo $e->getCause();         // Raw PostgreSQL error/detail text, if the gateway sent one
+    echo $e->getDatabase();      // Database name involved, if the gateway sent one
 }
 ```
 
@@ -325,27 +370,33 @@ Validates JWT tokens issued by the auth service.
 #### Constructor
 
 ```php
-new TokenValidator(string $auth_service_url)
+new TokenValidator(string $gatewayBaseUrl)
 ```
+
+`$gatewayBaseUrl` is whichever base URL exposes the `/auth/jwks` endpoint for the
+issuer of the tokens you need to verify (the gateway itself, or a central auth
+service — both serve JWKS the same way).
 
 #### Methods
 
 - `validateToken(string $jwt): TokenClaims` - Validate JWT and return claims
-- `getPublicKey(): string` - Get cached or fetch auth service's public key
-- `refreshPublicKey(): void` - Force refresh public key from JWKS endpoint
+- `getPublicKey(): string` - Get cached or fetch the public key from `{gatewayBaseUrl}/auth/jwks`
+- `refreshPublicKey(): void` - Force refresh public key from the JWKS endpoint
 
 ### TokenClaims
 
-Value object containing validated JWT claims.
+Value object containing validated JWT claims (`src/Auth/TokenClaims.php`).
 
 #### Properties
 
-- `string $sub` - Subject (user ID)
-- `?string $email` - User email
-- `?string $tenantId` - Tenant identifier
-- `?string $role` - User role
+- `string $identity_id` - The authenticated user's identity UUID
+- `string $tenant_id` - Tenant UUID the token is scoped to
+- `string $tenant_slug` - Human-readable tenant slug (empty string if unused by the platform)
+- `string $platform_code` - Which platform issued/owns this token
+- `string $role` - User's role in this tenant
+- `?string $local_user_id` - Platform-specific user record ID, if any
 - `int $exp` - Expiration timestamp
-- `int $iat` - Issued at timestamp
+- `int $iat` - Issued-at timestamp
 
 #### Methods
 
