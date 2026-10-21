@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-10-21
+
+MAJOR release (message contract change). Nothing changes for an application until it opts in to `^4.0`.
+
+### Security
+- `GatewayException` / `GatewayClient` never put the raw gateway `cause` (PostgreSQL message, `DETAIL`, `HINT`,
+  `CONTEXT`, text and values of a `RAISE EXCEPTION`) in exception messages, `getLastError()`, `previous` chains,
+  `__toString()`, `print_r`/`var_dump`/`var_export`, `(array)` casts or `serialize()`.
+- Messages are identifier-only: `Gateway returned HTTP 500: query_failed [database=.. function=.. sqlstate=..
+  constraint=.. code=.. ref=..]`. Only allow-listed, shape-validated fields are kept; a value that fails validation
+  is shown as `<redacted>`; secret-shaped tokens (long hex, digit or base64 runs) are refused.
+- The raw cause is NOT stored on the exception object. It lives in a weak registry and is reachable only through the
+  debug-only `getRawCauseForDebug()`. Never log its result.
+- Identifier extraction from the cause text (gateways that send no structured fields) reads ONLY the PostgreSQL
+  primary message line, and only PostgreSQL's own fixed phrasings (`duplicate key value violates unique constraint
+  "x"`, not-null, foreign key, check, undefined relation/column). It never reads DETAIL/HINT/CONTEXT or the trailing
+  `SCHEMA:/TABLE:/COLUMN:` segments, and never takes identifiers out of a `P0001` `RAISE` text.
+- The client no longer pretends a generated id is a gateway id: when the gateway sends no `correlation_id` /
+  `request_id`, the message carries `client_ref=<id>` (not greppable in gateway logs).
+- `#[\SensitiveParameter]` on query parameters and raw responses, so stack traces never show them.
+
+### Added
+- Application error code contract. `RAISE EXCEPTION '<code>'` or `'<code>: <free text>'`. `getAppErrorCode()` returns
+  the code (a token at the very start of the primary message, followed by `:` or end of line, or a bracketed `[ERxxx]` /
+  `[public:code:status]` tag). A token is a code ONLY if it is snake_case with at least one underscore (`not_found`,
+  `user_cap`), UPPER_SNAKE (`RATE_LIMITED`) or two letters plus 3-4 digits (`PY050`). A single word, a dotted or dashed
+  name, a UUID or an e-mail is never a code, so `RAISE EXCEPTION '%', name` cannot publish the value as a code (a
+  `rahul_sharma`-shaped value still can: never raise a bare interpolated value). Dashed UUIDs are also refused as
+  secret-shaped. Class statics hold live raw causes: see the DEBUGGER WARNING on `GatewayException` and the message carries `code=<token>`. Free text is
+  never surfaced. Sentence-style RAISEs yield no code. The client prefers gateway-sent structured fields
+  (`sqlstate`, `app_code`, `constraint`, `correlation_id`, `table`, `column`, `schema`) over parsing.
+- Safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`, `getAppErrorCode()`,
+  `getCorrelationId()`, `getClientRef()`, `hasRawCause()`.
+
+### Verified against a real gateway
+Parsing is verified end to end against StoneScriptDB Gateway 4.8.2 on PostgreSQL 15 (`tests/E2E`, run from the
+framework repository's `tests/E2E/run-e2e.sh`; skips LOUDLY without the stack). Findings from the real format that
+shaped the parser: function calls join error pieces with ` | `, migrations and seeders with ` - `; the gateway appends
+`SCHEMA:/TABLE:/COLUMN:` segments last (trusted only for errors PostgreSQL itself raised); `invalid input syntax for
+type ...` carries the value after the type name (only the fixed prefix is read, SQLSTATE 22P02 inferred).
+
+### UPGRADE from 3.x
+1. Replace `str_contains($e->getMessage(), '<postgres text>')` with `getAppErrorCode()` (business errors),
+   `getConstraint()` / `getSqlState()` (database errors), or `getRawCauseForDebug()` (debug only).
+2. Change sentence-style RAISEs to codes: `RAISE EXCEPTION 'insufficient_stock: item %', id;`. Only the code is surfaced.
+3. `getCause()` still works but is deprecated and returns raw text. Never log it.
+4. The gateway's free-text `message` field is no longer appended to the exception message.
+
+### Fixed
+- `GatewayClientRoutingTest` constructed clients without the (required) `schema_name`.
+
 ## [3.1.1] - 2026-07-04
 
 ### Fixed

@@ -429,3 +429,25 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 - GitHub Issues: [progalaxyelabs/stonescriptdb-gateway-client/issues](https://github.com/progalaxyelabs/stonescriptdb-gateway-client/issues)
 - Documentation: [docs.progalaxy.com](https://docs.progalaxy.com)
+
+## Error handling and privacy (4.0)
+
+`GatewayException` never carries PostgreSQL error text. Messages are identifier-only, for example
+`Gateway returned HTTP 500: query_failed [function=create_user constraint=users_email_key code=slug_taken ref=...]`.
+
+Signal business errors from SQL with a code, not a sentence:
+
+```sql
+RAISE EXCEPTION 'slug_taken';                      -- code only
+RAISE EXCEPTION 'slug_taken: slug % is in use', p; -- code + free text (free text is never surfaced)
+RAISE EXCEPTION '[ER102] stock short';             -- bracketed tag
+```
+
+```php
+try { $client->callFunction('create_site', [...]); }
+catch (GatewayException $e) {
+    if ($e->getAppErrorCode() === 'slug_taken:' || $e->getAppErrorCode() === 'slug_taken') { /* ... */ }
+    $e->getSqlState(); $e->getConstraint(); $e->getColumn(); $e->getCorrelationId();
+    // $e->getRawCauseForDebug() is debug-only and may contain customer data: never log it.
+}
+```
