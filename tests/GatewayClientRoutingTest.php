@@ -20,7 +20,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testDefaultsToMainSchema(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
 
         $this->assertSame('main', $client->getSchemaName());
         $this->assertNull($client->getUuid());
@@ -43,7 +43,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testSetTenantIdRoutesToTenantSchema(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
         $client->setTenantId('abc-123-uuid');
 
         $this->assertSame('tenant', $client->getSchemaName());
@@ -56,7 +56,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testSetTenantIdNullResetsToBaseSchema(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
         $client->setTenantId('abc-123-uuid');
         $client->setTenantId(null);
 
@@ -70,7 +70,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testSaveRestoreRoundTrip(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
         $client->setTenantId('tenant-xyz');
 
         $prev = $client->getTenantId();
@@ -87,7 +87,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testDirectSchemaAndUuidAccessors(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
 
         $this->assertSame($client, $client->setSchemaName('tenant'));
         $this->assertSame($client, $client->setUuid('u-1'));
@@ -103,7 +103,7 @@ class GatewayClientRoutingTest extends TestCase
      */
     public function testCallPayloadShapeContract(): void
     {
-        $client = new GatewayClient('http://gateway:9000', 'myapp');
+        $client = new GatewayClient('http://gateway:9000', 'myapp', 'main', 'tenant');
         $client->setTenantId('t-9');
 
         // The payload in callFunction() is: platform, schema_name, uuid, function, params.

@@ -571,24 +571,7 @@ class GatewayClient
         }
 
         if ($http_code !== 200) {
-            $error_message = "Gateway returned HTTP $http_code";
-            $error_body = null;
-
-            if ($response !== false && !empty($response)) {
-                $error_body = json_decode($response, true);
-                if (is_array($error_body) && isset($error_body['error'])) {
-                    $error_message .= ': ' . $error_body['error'];
-                }
-                if (is_array($error_body) && isset($error_body['message'])) {
-                    $error_message .= ' - ' . $error_body['message'];
-                }
-                // Include cause in the message for backward compatibility with str_contains() checks
-                if (is_array($error_body) && isset($error_body['cause'])) {
-                    $error_message .= ' (Cause: ' . $error_body['cause'] . ')';
-                }
-            }
-
-            throw new GatewayException($error_message, $http_code, null, $error_body);
+            throw $this->buildHttpError($http_code, $response, isset($data['function']) && is_string($data['function']) ? $data['function'] : null);
         }
 
         if ($response === false || $response === '') {
@@ -646,24 +629,7 @@ class GatewayClient
         }
 
         if ($http_code !== 200) {
-            $error_message = "Gateway returned HTTP $http_code";
-            $error_body = null;
-
-            if ($response !== false && !empty($response)) {
-                $error_body = json_decode($response, true);
-                if (is_array($error_body) && isset($error_body['error'])) {
-                    $error_message .= ': ' . $error_body['error'];
-                }
-                if (is_array($error_body) && isset($error_body['message'])) {
-                    $error_message .= ' - ' . $error_body['message'];
-                }
-                // Include cause in the message for backward compatibility with str_contains() checks
-                if (is_array($error_body) && isset($error_body['cause'])) {
-                    $error_message .= ' (Cause: ' . $error_body['cause'] . ')';
-                }
-            }
-
-            throw new GatewayException($error_message, $http_code, null, $error_body);
+            throw $this->buildHttpError($http_code, $response, null);
         }
 
         if ($response === false || $response === '') {
@@ -677,5 +643,42 @@ class GatewayClient
         }
 
         return $decoded;
+    }
+
+    /**
+     * Build an identifier-only GatewayException from a non-200 gateway response.
+     *
+     * The raw `cause` / `message` text (PostgreSQL message, DETAIL, HINT, RAISE EXCEPTION text)
+     * can echo customer data, so it is NOT put in the exception message, `last_error` or any log.
+     * It stays reachable only through GatewayException::getRawCauseForDebug().
+     *
+     * @param string|false $response
+     */
+    private function buildHttpError(int $http_code, $response, ?string $function_name): GatewayException
+    {
+        $error_body = null;
+        if ($response !== false && $response !== '' && $response !== null) {
+            $decoded = json_decode((string) $response, true);
+            $error_body = is_array($decoded) ? $decoded : null;
+        }
+        if ($error_body === null) {
+            $error_body = [];
+        }
+        if ($function_name !== null && !isset($error_body['function'])) {
+            $error_body['function'] = $function_name;
+        }
+        if (!isset($error_body['correlation_id']) && !isset($error_body['request_id'])) {
+            $error_body['correlation_id'] = bin2hex(random_bytes(4));
+        }
+
+        $probe = new GatewayException('', $http_code, null, $error_body);
+        $ctx = $probe->getSafeContext();
+        $message = "Gateway returned HTTP $http_code";
+        if (isset($ctx['error'])) {
+            $message .= ': ' . $ctx['error'];
+        }
+        $message .= GatewayException::formatSafeSuffix($ctx);
+
+        return new GatewayException($message, $http_code, null, $error_body);
     }
 }

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2] - 2026-10-21
+
+### Security
+- `GatewayException` / `GatewayClient` no longer put the raw gateway `cause` (PostgreSQL message,
+  `DETAIL`, `HINT`, custom `RAISE EXCEPTION` text) into exception messages or `getLastError()`.
+  Messages are now identifier-only: `Gateway returned HTTP 500: query_failed [database=.. function=..
+  constraint=.. column=.. ref=..]` (SQLSTATE/schema/table also included when the gateway supplies them).
+- Only allow-listed, shape-validated identifier fields are retained from the error body. The raw cause is
+  held privately and reachable only via the new debug-only `getRawCauseForDebug()`.
+- `__toString()`, `print_r`/`var_dump` and `serialize` of the exception never include the raw cause or
+  trace argument values.
+- New safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`,
+  `getCorrelationId()`, `hasRawCause()`.
+
+### Changed (breaking for string-matching callers)
+- Code that did `str_contains($e->getMessage(), '<postgres text>')` must switch to the constraint/column
+  accessors or (debug/in-process only) `getRawCauseForDebug()`. `getCause()` still works but is deprecated.
+- The gateway's free-text `message` field is no longer appended to the exception message.
+
+### Fixed
+- `GatewayClientRoutingTest` constructed clients without the (required) `schema_name`.
+
 ## [3.1.1] - 2026-07-04
 
 ### Fixed
