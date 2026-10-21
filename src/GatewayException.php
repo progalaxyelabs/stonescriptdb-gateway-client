@@ -123,7 +123,12 @@ class GatewayException extends Exception
                 $cut = $i;
             }
         }
-        return trim(substr($cause, 0, $cut));
+        $line = substr($cause, 0, $cut);
+        // Single-line renderings put the detail inline: `msg DETAIL:  Key (..)=(..)`.
+        if (preg_match('/\s(?:DETAIL|HINT|CONTEXT|STATEMENT|QUERY):\s/', $line, $m, PREG_OFFSET_CAPTURE) === 1) {
+            $line = substr($line, 0, $m[0][1]);
+        }
+        return trim($line);
     }
 
     /**

@@ -198,6 +198,13 @@ class GatewayNoLeakTest extends TestCase
         $this->assertNull($e->getConstraint());
     }
 
+    public function testInlineDetailIsCutFromPrimaryLine(): void
+    {
+        $e = $this->exc('duplicate key value violates unique constraint "users_email_key" DETAIL:  Key (email)=(jane.sentinel@example.test) already exists.');
+        $this->assertSame('users_email_key', $e->getConstraint());
+        $this->assertNoLeak($e);
+    }
+
     public function testMissingFunctionPhrasing(): void
     {
         $e = $this->exc('function auth_rt_inspect(text, integer) does not exist | HINT: No function matches the given name and argument types.');
