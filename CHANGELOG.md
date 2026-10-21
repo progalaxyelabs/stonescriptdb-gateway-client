@@ -35,6 +35,13 @@ MAJOR release (message contract change). Nothing changes for an application unti
 - Safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`, `getAppErrorCode()`,
   `getCorrelationId()`, `getClientRef()`, `hasRawCause()`.
 
+### Verified against a real gateway
+Parsing is verified end to end against StoneScriptDB Gateway 4.8.2 on PostgreSQL 15 (`tests/E2E`, run from the
+framework repository's `tests/E2E/run-e2e.sh`; skips LOUDLY without the stack). Findings from the real format that
+shaped the parser: function calls join error pieces with ` | `, migrations and seeders with ` - `; the gateway appends
+`SCHEMA:/TABLE:/COLUMN:` segments last (trusted only for errors PostgreSQL itself raised); `invalid input syntax for
+type ...` carries the value after the type name (only the fixed prefix is read, SQLSTATE 22P02 inferred).
+
 ### UPGRADE from 3.x
 1. Replace `str_contains($e->getMessage(), '<postgres text>')` with `getAppErrorCode()` (business errors),
    `getConstraint()` / `getSqlState()` (database errors), or `getRawCauseForDebug()` (debug only).

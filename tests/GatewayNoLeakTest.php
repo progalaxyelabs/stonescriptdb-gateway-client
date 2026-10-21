@@ -205,6 +205,23 @@ class GatewayNoLeakTest extends TestCase
         $this->assertNoLeak($e);
     }
 
+    public function testRealGatewayShapes(): void
+    {
+        // shapes captured from a real gateway 4.8.2 against PostgreSQL 15
+        $e = $this->exc('duplicate key value violates unique constraint "users_email_key" | DETAIL: Key (email)=(a@b.c) already exists. | SCHEMA: public | TABLE: users');
+        $this->assertSame(['23505', 'users_email_key', 'users', 'public'], [$e->getSqlState(), $e->getConstraint(), $e->getSafeContext()['table'] ?? null, $e->getSafeContext()['schema'] ?? null]);
+        $e = $this->exc('duplicate key value violates unique constraint "users_email_key" - Key (email)=(a@b.c) already exists.');
+        $this->assertSame('users_email_key', $e->getConstraint(), 'migration/seeder " - " format');
+        $e = $this->exc('invalid input syntax for type uuid: "a@b.c"');
+        $this->assertSame('22P02', $e->getSqlState());
+        $this->assertNoLeak($e);
+        // a RAISE cannot borrow the trailing-segment trust
+        $e = $this->exc('Something failed | SCHEMA: smuggled_sch | TABLE: smuggled_tbl');
+        $this->assertArrayNotHasKey('table', $e->getSafeContext());
+        $e = $this->exc('not_found: x | TABLE: smuggled_tbl');
+        $this->assertArrayNotHasKey('table', $e->getSafeContext());
+    }
+
     public function testMissingFunctionPhrasing(): void
     {
         $e = $this->exc('function auth_rt_inspect(text, integer) does not exist | HINT: No function matches the given name and argument types.');

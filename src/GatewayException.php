@@ -100,6 +100,7 @@ class GatewayException extends Exception
         }
         $this->keep('client_ref', $body, 'client_ref', self::CORRELATION);
 
+        // (see parseTrailing() for the gateway's own SCHEMA/TABLE/COLUMN segments)
         // Fallback for gateways that send only the free-text cause: parse ONLY the PostgreSQL primary message
         // (the first line / first " | " segment), never DETAIL, HINT, CONTEXT or the trailing SCHEMA/TABLE/COLUMN
         // segments (a RAISE can forge those). See parsePrimary().
@@ -110,14 +111,28 @@ class GatewayException extends Exception
                     $this->safe[$field] = $value;
                 }
             }
+            // The gateway's own trailing SCHEMA/TABLE/COLUMN segments are trusted ONLY for errors PostgreSQL itself
+            // raised (the primary line matched one of its fixed phrasings, i.e. a system SQLSTATE class), never for a
+            // RAISE EXCEPTION text, which could imitate them.
+            $state = $this->safe['sqlstate'] ?? null;
+            if ($state !== null && !isset($this->safe['app_code']) && in_array(substr($state, 0, 2), self::SYSTEM_CLASSES, true)) {
+                foreach (self::parseTrailing($cause) as $field => $value) {
+                    if (!isset($this->safe[$field])) {
+                        $this->safe[$field] = $value;
+                    }
+                }
+            }
         }
     }
 
-    /** The PostgreSQL primary message: text before the first newline or gateway " | " separator. */
+    /**
+     * The PostgreSQL primary message: text before the first newline or gateway separator. The gateway joins the
+     * pieces of a database error with " | " (function calls) or " - " (migrations and seeders).
+     */
     public static function primaryLine(string $cause): string
     {
         $cut = strlen($cause);
-        foreach (["\n", ' | '] as $sep) {
+        foreach (["\n", ' | ', ' - '] as $sep) {
             $i = strpos($cause, $sep);
             if ($i !== false && $i < $cut) {
                 $cut = $i;
@@ -168,6 +183,22 @@ class GatewayException extends Exception
             }
         }
 
+        // PostgreSQL phrasings whose tail echoes the offending value: only the leading fixed words are matched, the
+        // tail is discarded unread.
+        $prefixes = [
+            ['/^invalid input syntax for type [a-z][a-z0-9_ ]{0,40}(?::|$)/', '22P02'],
+            ['/^value too long for type [a-z][a-z0-9_ ()]{0,40}$/', '22001'],
+            ['/^(?:integer|smallint|bigint|numeric field|value) out of range|^numeric field overflow$/', '22003'],
+        ];
+        foreach ($prefixes as [$re, $state]) {
+            if (preg_match($re, $line) === 1) {
+                if ($knownState === null) {
+                    $out['sqlstate'] = $state;
+                }
+                return $out;
+            }
+        }
+
         // Not a PostgreSQL-generated phrasing: a candidate application error code, but only when the SQLSTATE
         // is unknown, P0001, or a custom class.
         if ($knownState !== null && in_array(substr($knownState, 0, 2), self::SYSTEM_CLASSES, true)) {
@@ -183,6 +214,25 @@ class GatewayException extends Exception
         }
         if ($code !== null && !self::looksSecret($code)) {
             $out['app_code'] = $code;
+        }
+        return $out;
+    }
+
+    /**
+     * The gateway appends `SCHEMA: x`, `TABLE: x`, `COLUMN: x` (in that order, last) taken from PostgreSQL's
+     * structured error fields. Read only the consecutive run at the very end of the cause.
+     *
+     * @return array<string,string>
+     */
+    public static function parseTrailing(string $cause): array
+    {
+        $out = [];
+        $segments = explode(' | ', $cause);
+        for ($i = count($segments) - 1; $i > 0; $i--) {
+            if (preg_match('/^(SCHEMA|TABLE|COLUMN): ([A-Za-z_][A-Za-z0-9_$]{0,62})$/', $segments[$i], $m) !== 1 || self::looksSecret($m[2])) {
+                break;
+            }
+            $out[strtolower($m[1])] = $m[2];
         }
         return $out;
     }
