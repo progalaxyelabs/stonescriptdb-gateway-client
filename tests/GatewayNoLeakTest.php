@@ -198,6 +198,13 @@ class GatewayNoLeakTest extends TestCase
         $this->assertNull($e->getConstraint());
     }
 
+    public function testMissingFunctionPhrasing(): void
+    {
+        $e = $this->exc('function auth_rt_inspect(text, integer) does not exist | HINT: No function matches the given name and argument types.');
+        $this->assertSame('42883', $e->getSqlState());
+        $this->assertSame('auth_rt_inspect', $e->getSafeContext()['function']);
+    }
+
     public function testRawCauseNotReachableByDumpersOrCasts(): void
     {
         $e = $this->exc('duplicate key | DETAIL: Key (email)=(jane.sentinel@example.test) already exists. +919876500123');

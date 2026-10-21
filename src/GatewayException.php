@@ -114,7 +114,7 @@ class GatewayException extends Exception
     }
 
     /** The PostgreSQL primary message: text before the first newline or gateway " | " separator. */
-    private static function primaryLine(string $cause): string
+    public static function primaryLine(string $cause): string
     {
         $cut = strlen($cause);
         foreach (["\n", ' | '] as $sep) {
@@ -127,9 +127,12 @@ class GatewayException extends Exception
     }
 
     /**
-     * @return array<string,string> subset of sqlstate, constraint, table, column, app_code
+     * Parse ONE PostgreSQL primary message line (no DETAIL/HINT/CONTEXT) into allow-listed fields.
+     * Public so other layers (direct transports, CLI) apply the exact same rules.
+     *
+     * @return array<string,string> subset of sqlstate, constraint, table, column, function, app_code
      */
-    private static function parsePrimary(string $line, ?string $knownState): array
+    public static function parsePrimary(string $line, ?string $knownState): array
     {
         $out = [];
         $q = '"([A-Za-z_][A-Za-z0-9_$]{0,62})"';
@@ -144,6 +147,7 @@ class GatewayException extends Exception
             ['/^relation ' . $q . ' does not exist$/', '42P01', ['table']],
             ['/^column ' . $q . ' of relation ' . $q . ' does not exist$/', '42703', ['column', 'table']],
             ['/^column ' . $q . ' does not exist$/', '42703', ['column']],
+            ['/^function ([A-Za-z_][A-Za-z0-9_$]{0,62})\\([A-Za-z0-9_ ,\\[\\]."]{0,200}\\) does not exist$/', '42883', ['function']],
         ];
         foreach ($fixed as [$re, $state, $fields]) {
             if (preg_match($re, $line, $m) === 1) {
