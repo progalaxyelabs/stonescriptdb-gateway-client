@@ -5,24 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.2] - 2026-10-21
+## [4.0.0] - 2026-10-21
+
+MAJOR release (message contract change). Nothing changes for an application until it opts in to `^4.0`.
 
 ### Security
-- `GatewayException` / `GatewayClient` no longer put the raw gateway `cause` (PostgreSQL message,
-  `DETAIL`, `HINT`, custom `RAISE EXCEPTION` text) into exception messages or `getLastError()`.
-  Messages are now identifier-only: `Gateway returned HTTP 500: query_failed [database=.. function=..
-  constraint=.. column=.. ref=..]` (SQLSTATE/schema/table also included when the gateway supplies them).
-- Only allow-listed, shape-validated identifier fields are retained from the error body. The raw cause is
-  held privately and reachable only via the new debug-only `getRawCauseForDebug()`.
-- `__toString()`, `print_r`/`var_dump` and `serialize` of the exception never include the raw cause or
-  trace argument values.
-- New safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`,
-  `getCorrelationId()`, `hasRawCause()`.
+- `GatewayException` / `GatewayClient` never put the raw gateway `cause` (PostgreSQL message, `DETAIL`, `HINT`,
+  `CONTEXT`, text and values of a `RAISE EXCEPTION`) in exception messages, `getLastError()`, `previous` chains,
+  `__toString()`, `print_r`/`var_dump`/`var_export`, `(array)` casts or `serialize()`.
+- Messages are identifier-only: `Gateway returned HTTP 500: query_failed [database=.. function=.. sqlstate=..
+  constraint=.. code=.. ref=..]`. Only allow-listed, shape-validated fields are kept; a value that fails validation
+  is shown as `<redacted>`; secret-shaped tokens (long hex, digit or base64 runs) are refused.
+- The raw cause is NOT stored on the exception object. It lives in a weak registry and is reachable only through the
+  debug-only `getRawCauseForDebug()`. Never log its result.
+- Identifier extraction from the cause text (gateways that send no structured fields) reads ONLY the PostgreSQL
+  primary message line, and only PostgreSQL's own fixed phrasings (`duplicate key value violates unique constraint
+  "x"`, not-null, foreign key, check, undefined relation/column). It never reads DETAIL/HINT/CONTEXT or the trailing
+  `SCHEMA:/TABLE:/COLUMN:` segments, and never takes identifiers out of a `P0001` `RAISE` text.
+- The client no longer pretends a generated id is a gateway id: when the gateway sends no `correlation_id` /
+  `request_id`, the message carries `client_ref=<id>` (not greppable in gateway logs).
+- `#[\SensitiveParameter]` on query parameters and raw responses, so stack traces never show them.
 
-### Changed (breaking for string-matching callers)
-- Code that did `str_contains($e->getMessage(), '<postgres text>')` must switch to the constraint/column
-  accessors or (debug/in-process only) `getRawCauseForDebug()`. `getCause()` still works but is deprecated.
-- The gateway's free-text `message` field is no longer appended to the exception message.
+### Added
+- Application error code contract. `RAISE EXCEPTION '<code>'` or `'<code>: <free text>'`. `getAppErrorCode()` returns
+  the code (a token at the very start of the primary message: `[A-Za-z][A-Za-z0-9_.-]{0,63}` followed by `:` or end of
+  line, or a bracketed `[ERxxx]` / `[public:code:status]` tag) and the message carries `code=<token>`. Free text is
+  never surfaced. Sentence-style RAISEs yield no code. The client prefers gateway-sent structured fields
+  (`sqlstate`, `app_code`, `constraint`, `correlation_id`, `table`, `column`, `schema`) over parsing.
+- Safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`, `getAppErrorCode()`,
+  `getCorrelationId()`, `getClientRef()`, `hasRawCause()`.
+
+### UPGRADE from 3.x
+1. Replace `str_contains($e->getMessage(), '<postgres text>')` with `getAppErrorCode()` (business errors),
+   `getConstraint()` / `getSqlState()` (database errors), or `getRawCauseForDebug()` (debug only).
+2. Change sentence-style RAISEs to codes: `RAISE EXCEPTION 'insufficient_stock: item %', id;`. Only the code is surfaced.
+3. `getCause()` still works but is deprecated and returns raw text. Never log it.
+4. The gateway's free-text `message` field is no longer appended to the exception message.
 
 ### Fixed
 - `GatewayClientRoutingTest` constructed clients without the (required) `schema_name`.

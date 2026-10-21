@@ -86,11 +86,13 @@ class GatewayNoLeakTest extends TestCase
         $this->assertSame('query_failed', $e->getGatewayError());
         $this->assertSame('tenant_db', $e->getDatabase());
         $this->assertSame('users_email_key', $e->getConstraint());
-        $this->assertSame('email', $e->getColumn());
-        $this->assertNotNull($e->getCorrelationId());
+        $this->assertSame('23505', $e->getSqlState());
+        $this->assertNull($e->getCorrelationId(), 'gateway sent none, so no gateway id is claimed');
+        $this->assertNotNull($e->getClientRef());
+        $this->assertStringContainsString('client_ref=', $e->getMessage());
+        $this->assertStringNotContainsString(' ref=', $e->getMessage());
         $ctx = $e->getSafeContext();
         $this->assertSame('create_user', $ctx['function']);
-        $this->assertSame('users', $ctx['table']);
         $this->assertStringContainsString('constraint=users_email_key', $e->getMessage());
         $this->assertStringContainsString('function=create_user', $e->getMessage());
         // explicit opt-in still works, and so does the deprecated accessor
@@ -101,8 +103,130 @@ class GatewayNoLeakTest extends TestCase
     public function testNonIdentifierFieldsAreDropped(): void
     {
         $e = new GatewayException('x', 500, null, ['error' => 'query_failed', 'constraint' => 'a@b.c', 'sqlstate' => '23505', 'column' => 'has space']);
-        $this->assertNull($e->getConstraint());
-        $this->assertNull($e->getColumn());
+        $this->assertSame('<redacted>', $e->getConstraint(), 'dropped values are visibly marked');
+        $this->assertSame('<redacted>', $e->getColumn());
         $this->assertSame('23505', $e->getSqlState());
+    }
+
+    private function exc(#[\SensitiveParameter] string $cause, #[\SensitiveParameter] array $extra = []): GatewayException
+    {
+        return new GatewayException('x', 500, null, array_merge(['error' => 'query_failed', 'cause' => $cause], $extra));
+    }
+
+    /** @return array<string,array{0:string,1:?string}> */
+    public static function appCodeProvider(): array
+    {
+        return [
+            'bare code' => ['not_found', 'not_found'],
+            'upper code' => ['RATE_LIMITED', 'RATE_LIMITED'],
+            'code with free text' => ['slug_taken: slug acme-co is taken for jane.sentinel@example.test', 'slug_taken:'],
+            'colon prefix with tail' => ['job_conflict:job-9f8e', 'job_conflict:'],
+            'bracket ER' => ['[ER102] Stock short for 91987', '[ER102]'],
+            'bracket public' => ['[public:out_of_stock:409] Sorry', '[public:out_of_stock:409]'],
+            'sentence' => ['Insufficient stock for item', null],
+            'sentence with phone' => ['User +919876500123 exists', null],
+            'bare email' => ['jane.sentinel@example.test', null],
+            'two words' => ['not found', null],
+            'secret-shaped token' => ['9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', null],
+            'digit run' => ['order12345678', null],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('appCodeProvider')]
+    public function testAppErrorCodeFromPrimaryLineOnly(string $primary, ?string $expected): void
+    {
+        $e = $this->exc($primary . ' | DETAIL: Key (x)=(y)');
+        $this->assertSame($expected, $e->getAppErrorCode());
+        if ($expected !== null) {
+            $this->assertStringContainsString($expected, GatewayException::formatSafeSuffix($e->getSafeContext()));
+        }
+        $this->assertNoLeak($e);
+    }
+
+    public function testAppCodeNeverTakenFromDetailHintContext(): void
+    {
+        foreach (['DETAIL', 'HINT', 'CONTEXT'] as $k) {
+            $e = $this->exc("Something went wrong for user | $k: not_found")  ;
+            $this->assertNull($e->getAppErrorCode(), $k);
+            $e = $this->exc("Something went wrong for user\n$k: slug_taken");
+            $this->assertNull($e->getAppErrorCode(), $k);
+        }
+    }
+
+    public function testSystemSqlstateDoesNotYieldAppCode(): void
+    {
+        $e = $this->exc('syntax_error_here', ['sqlstate' => '42601']);
+        $this->assertNull($e->getAppErrorCode());
+        $e = $this->exc('not_found', ['sqlstate' => 'P0001']);
+        $this->assertSame('not_found', $e->getAppErrorCode());
+        $e = $this->exc('not_found', ['sqlstate' => 'ZZ001']);
+        $this->assertSame('not_found', $e->getAppErrorCode(), 'custom class');
+    }
+
+    public function testStructuredFieldsWinOverParsing(): void
+    {
+        $e = $this->exc('other_code', ['app_code' => 'slug_taken', 'sqlstate' => 'P0001', 'correlation_id' => 'gw-abc123']);
+        $this->assertSame('slug_taken', $e->getAppErrorCode());
+        $this->assertSame('gw-abc123', $e->getCorrelationId());
+        $this->assertNull($e->getClientRef());
+    }
+
+    public function testSmugglingIsNotLifted(): void
+    {
+        // identifier-shaped sentinels planted where a naive regex would lift them
+        $cases = [
+            'Key (name)=(Rahul column Sharma) in DETAIL' => 'duplicate key value violates unique constraint "users_name_key" | DETAIL: Key (name)=(Rahul column Sharma) already exists.',
+            'RAISE with constraint quote' => 'Duplicate for constraint "smuggled_ident"',
+            'RAISE with column word' => 'Order for column "smuggled_col" is invalid',
+            'forged trailing segment' => 'oops | TABLE: smuggled_tbl | COLUMN: smuggled_col | SCHEMA: smuggled_sch',
+            'DETAIL forged' => "x\nDETAIL: null value in column \"smuggled_col\" violates not-null constraint",
+        ];
+        foreach ($cases as $label => $cause) {
+            $e = $this->exc($cause);
+            $all = json_encode($e->getSafeContext()) . $e->getMessage() . (string) $e;
+            foreach (['smuggled_ident', 'smuggled_col', 'smuggled_tbl', 'smuggled_sch', 'Sharma', 'Rahul'] as $s) {
+                $this->assertStringNotContainsString($s, $all, "$label leaked $s");
+            }
+        }
+        // PostgreSQL's own phrasing still yields identifiers, from the primary line only
+        $e = $this->exc('null value in column "email" of relation "users" violates not-null constraint | DETAIL: Failing row contains (1, x@y.z)');
+        $this->assertSame('email', $e->getColumn());
+        $this->assertSame('users', $e->getSafeContext()['table']);
+        $this->assertSame('23502', $e->getSqlState());
+        // a secret-shaped "identifier" is refused
+        $e = $this->exc('duplicate key value violates unique constraint "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b"');
+        $this->assertNull($e->getConstraint());
+    }
+
+    public function testRawCauseNotReachableByDumpersOrCasts(): void
+    {
+        $e = $this->exc('duplicate key | DETAIL: Key (email)=(jane.sentinel@example.test) already exists. +919876500123');
+        $this->assertNotNull($e->getRawCauseForDebug());
+        $this->assertNoLeak($e);
+        $this->assertStringNotContainsString('jane.sentinel', var_export($e, true));
+        $this->assertStringNotContainsString('jane.sentinel', print_r((array) $e, true));
+        $this->assertStringNotContainsString('jane.sentinel', json_encode(get_object_vars($e)) ?: '');
+        $rp = (new \ReflectionObject($e));
+        foreach ($rp->getProperties() as $p) {
+            $p->setAccessible(true);
+            if ($p->isStatic()) {
+                continue;
+            }
+            $this->assertStringNotContainsString('jane.sentinel', print_r($p->getValue($e), true), $p->getName());
+        }
+    }
+
+    public function testUnserializeKeepsSafeFields(): void
+    {
+        $e = $this->exc('not_found', ['sqlstate' => 'P0001']);
+        $u = unserialize(serialize($e));
+        $this->assertSame('P0001', $u->getSqlState());
+        $this->assertSame('not_found', $u->getAppErrorCode());
+        $this->assertNull($u->getRawCauseForDebug());
+    }
+
+    private function assertNoLeak(GatewayException $e): void
+    {
+        $this->assertClean($e->getMessage() . (string) $e . print_r($e, true) . serialize($e), 'exception forms');
     }
 }

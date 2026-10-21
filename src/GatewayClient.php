@@ -668,7 +668,7 @@ class GatewayClient
             $error_body['function'] = $function_name;
         }
         if (!isset($error_body['correlation_id']) && !isset($error_body['request_id'])) {
-            $error_body['correlation_id'] = bin2hex(random_bytes(4));
+            $error_body['client_ref'] = bin2hex(random_bytes(4));
         }
 
         $probe = new GatewayException('', $http_code, null, $error_body);
