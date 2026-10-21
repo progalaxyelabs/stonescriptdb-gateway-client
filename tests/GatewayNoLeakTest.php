@@ -129,6 +129,28 @@ class GatewayNoLeakTest extends TestCase
             'two words' => ['not found', null],
             'secret-shaped token' => ['9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', null],
             'digit run' => ['order12345678', null],
+            // a value interpolated by RAISE '%', name must never be taken for a code
+            'bare name' => ['Rahul', null],
+            'bare name lower' => ['jdoe', null],
+            'dotted name' => ['john.doe', null],
+            'dashed name' => ['john-smith', null],
+            'dashed uuid' => ['9f86d081-884c-7d65-9a2f-eaa0c55ad015', null],
+            'single lowercase word' => ['locked', null],
+            'colon after a name' => ['Rahul: hello', null],
+            'colon after dotted name' => ['john.doe: hello', null],
+            // every code the platforms use today
+            'p1' => ['user_cap', 'user_cap'],
+            'p2' => ['repo_op_busy', 'repo_op_busy'],
+            'p3' => ['tenant_already_exists', 'tenant_already_exists'],
+            'p4' => ['PY050', 'PY050'],
+            'p5' => ['CODE_NOT_FOUND: no pending pairing code matches', 'CODE_NOT_FOUND:'],
+            'p6' => ['CODE_EXPIRED: pairing code has expired', 'CODE_EXPIRED:'],
+            'p7' => ['INVALID_DEVICE_CODE: unknown or superseded device code', 'INVALID_DEVICE_CODE:'],
+            'p8' => ['UNKNOWN_PACK: pack x not found', 'UNKNOWN_PACK:'],
+            'p9' => ['RATE_LIMITED: too many attempts, try again later', 'RATE_LIMITED:'],
+            'p10' => ['project_member_cap_reached', 'project_member_cap_reached'],
+            'p11' => ['ORDER_ALREADY_CAPTURED', 'ORDER_ALREADY_CAPTURED'],
+            'p12' => ['tenant_creator_row_undeletable', 'tenant_creator_row_undeletable'],
         ];
     }
 

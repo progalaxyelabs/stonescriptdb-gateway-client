@@ -28,8 +28,12 @@ MAJOR release (message contract change). Nothing changes for an application unti
 
 ### Added
 - Application error code contract. `RAISE EXCEPTION '<code>'` or `'<code>: <free text>'`. `getAppErrorCode()` returns
-  the code (a token at the very start of the primary message: `[A-Za-z][A-Za-z0-9_.-]{0,63}` followed by `:` or end of
-  line, or a bracketed `[ERxxx]` / `[public:code:status]` tag) and the message carries `code=<token>`. Free text is
+  the code (a token at the very start of the primary message, followed by `:` or end of line, or a bracketed `[ERxxx]` /
+  `[public:code:status]` tag). A token is a code ONLY if it is snake_case with at least one underscore (`not_found`,
+  `user_cap`), UPPER_SNAKE (`RATE_LIMITED`) or two letters plus 3-4 digits (`PY050`). A single word, a dotted or dashed
+  name, a UUID or an e-mail is never a code, so `RAISE EXCEPTION '%', name` cannot publish the value as a code (a
+  `rahul_sharma`-shaped value still can: never raise a bare interpolated value). Dashed UUIDs are also refused as
+  secret-shaped. Class statics hold live raw causes: see the DEBUGGER WARNING on `GatewayException` and the message carries `code=<token>`. Free text is
   never surfaced. Sentence-style RAISEs yield no code. The client prefers gateway-sent structured fields
   (`sqlstate`, `app_code`, `constraint`, `correlation_id`, `table`, `column`, `schema`) over parsing.
 - Safe accessors: `getSafeContext()`, `getSqlState()`, `getConstraint()`, `getColumn()`, `getAppErrorCode()`,

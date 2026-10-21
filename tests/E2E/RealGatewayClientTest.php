@@ -48,6 +48,11 @@ final class RealGatewayClientTest extends TestCase
             'bracket ER' => ['raise', 'tag_er', ['app' => '[ER102]']],
             'bracket public' => ['raise', 'tag_public', ['app' => '[public:code:409]']],
             'sentence' => ['raise', 'sentence', ['app' => null]],
+            'bare value Rahul' => ['raise', 'bare_value', ['app' => null, 'val' => 'Rahul']],
+            'bare value jdoe' => ['raise', 'bare_value', ['app' => null, 'val' => 'jdoe']],
+            'bare value dotted' => ['raise', 'bare_value', ['app' => null, 'val' => 'john.doe']],
+            'bare value dashed' => ['raise', 'bare_value', ['app' => null, 'val' => 'john-smith']],
+            'bare value uuid' => ['raise', 'bare_value', ['app' => null, 'val' => '9f86d081-884c-7d65-9a2f-eaa0c55ad015']],
             'value interpolating' => ['raise', 'value_exists', ['app' => null]],
             'secondary fields' => ['raise', 'detail', ['app' => null]],
             'smuggling' => ['raise', 'smuggle', ['app' => null, 'constraint' => null, 'column' => null]],
@@ -86,7 +91,7 @@ final class RealGatewayClientTest extends TestCase
                 $call = ['ghost_table_fn', []];
                 break;
             default:
-                $call = ['raise_it', [$arg, $email]];
+                $call = ['raise_it', [$arg, $expect['val'] ?? $email]];
         }
         try {
             $client->callFunction($call[0], $call[1]);
@@ -99,6 +104,10 @@ final class RealGatewayClientTest extends TestCase
                 $this->assertSame($expect['table'], $e->getSafeContext()['table'] ?? null, 'table');
             }
             $this->assertSame($expect['app'] ?? null, $e->getAppErrorCode(), 'app code');
+            if (isset($expect['val'])) {
+                $this->assertStringNotContainsString($expect['val'], $e->getMessage(), 'a value must never appear in the message');
+                $this->assertStringNotContainsString('code=', $e->getMessage());
+            }
             if (($expect['app'] ?? null) !== null) {
                 $this->assertStringContainsString('code=' . $expect['app'], $e->getMessage());
             }

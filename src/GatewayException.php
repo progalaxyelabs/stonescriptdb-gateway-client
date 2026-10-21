@@ -29,11 +29,21 @@ use Exception;
  * APPLICATION ERROR CODE CONTRACT. A PL/pgSQL function signals a business
  * error with `RAISE EXCEPTION '<code>'` or `RAISE EXCEPTION '<code>: <free text>'`.
  * Only the code (a token at the very start of the PostgreSQL primary message,
- * `[A-Za-z][A-Za-z0-9_.-]{0,63}` followed by `:` or end of line, or a
- * bracketed tag such as `[ER123]` / `[public:code:status]`) is surfaced, via
+ * followed by `:` or end of line, or a bracketed tag such as `[ER123]` /
+ * `[public:code:status]`) is surfaced. A token is a code only if it has one of
+ * these shapes: snake_case with at least one underscore (`not_found`),
+ * UPPER_SNAKE (`RATE_LIMITED`) or two letters plus 3-4 digits (`PY050`). A
+ * single word, a dotted or dashed name, a UUID or an e-mail is never a code, so
+ * `RAISE EXCEPTION '%', name` cannot publish the value as a code. Via
  * {@see getAppErrorCode()} and `code=<token>` in the message. Free text,
  * DETAIL, HINT and CONTEXT are never surfaced. A sentence-style RAISE
  * ("Insufficient stock for item") yields no code: use a code.
+ *
+ * DEBUGGER WARNING. Raw causes live in a class-level WeakMap
+ * (GatewayException::$rawCauses) for as long as their exception is alive. The
+ * exception object does not carry them, but a debugger, profiler or
+ * reflection-based dumper that reads this CLASS's static properties will see
+ * live raw causes. Never attach one to a production process.
  *
  * @package StoneScriptDB
  */
@@ -43,7 +53,9 @@ class GatewayException extends Exception
     private const IDENT = '/^[A-Za-z_][A-Za-z0-9_$]{0,62}$/';
     private const SQLSTATE = '/^[0-9A-Z]{5}$/';
     private const CORRELATION = '/^[A-Za-z0-9_-]{1,64}$/';
-    private const APP_CODE = '/^(?:\[(?:ER[A-Za-z0-9_]{1,30}|public(?::[a-z][a-z0-9_]{0,40})?(?::[1-4][0-9]{2})?)\]|[A-Za-z][A-Za-z0-9_.-]{0,63}:?)$/';
+    /** The accepted shapes of a code token (without a trailing colon): snake_case, UPPER_SNAKE, XX123 / XX1234. */
+    private const CODE_TOKEN = '/^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{2}[0-9]{3,4})$/';
+    private const APP_CODE = '/^(?:\[(?:ER[A-Za-z0-9_]{1,30}|public(?::[a-z][a-z0-9_]{0,40})?(?::[1-4][0-9]{2})?)\]|(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{2}[0-9]{3,4}):?)$/';
 
     /** SQLSTATE classes PostgreSQL itself raises. P0001 (raise_exception) is deliberately NOT a system class here. */
     private const SYSTEM_CLASSES = [
@@ -207,9 +219,9 @@ class GatewayException extends Exception
         $code = null;
         if (preg_match('/^(\[(?:ER[A-Za-z0-9_]{1,30}|public(?::[a-z][a-z0-9_]{0,40})?(?::[1-4][0-9]{2})?)\])/', $line, $m) === 1) {
             $code = $m[1];
-        } elseif (preg_match('/^([A-Za-z][A-Za-z0-9_.-]{0,63}:)/', $line, $m) === 1) {
-            $code = $m[1];
-        } elseif (preg_match('/^([A-Za-z][A-Za-z0-9_.-]{0,63})$/', $line, $m) === 1) {
+        } elseif (preg_match('/^([A-Za-z0-9_]{2,64}):/', $line, $m) === 1 && preg_match(self::CODE_TOKEN, $m[1]) === 1) {
+            $code = $m[1] . ':';
+        } elseif (preg_match('/^([A-Za-z0-9_]{2,64})$/', $line, $m) === 1 && preg_match(self::CODE_TOKEN, $m[1]) === 1) {
             $code = $m[1];
         }
         if ($code !== null && !self::looksSecret($code)) {
@@ -241,6 +253,7 @@ class GatewayException extends Exception
     private static function looksSecret(string $v): bool
     {
         return preg_match('/[0-9A-Fa-f]{16,}/', $v) === 1
+            || preg_match('/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/', $v) === 1
             || preg_match('/[0-9]{6,}/', $v) === 1
             || (preg_match('/^[A-Za-z0-9+\/=]{24,}$/', $v) === 1 && preg_match('/[0-9]/', $v) === 1 && preg_match('/[A-Za-z]/', $v) === 1);
     }
