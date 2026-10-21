@@ -15,7 +15,7 @@ use StoneScriptDB\GatewayException;
  */
 final class RealGatewayClientTest extends TestCase
 {
-    private const FORBIDDEN = ['jane.sentinel', 'Key (', 'DETAIL', 'HINT', 'Failing row', 'is not present in table', 'smuggled_key', 'smuggled_col'];
+    private const FORBIDDEN = ['jane.sentinel', 'attacker text', 'Alice Victim', 'Key (', 'DETAIL', 'HINT', 'Failing row', 'is not present in table', 'smuggled_key', 'smuggled_col'];
 
     public static function setUpBeforeClass(): void
     {
@@ -47,6 +47,7 @@ final class RealGatewayClientTest extends TestCase
             'code + text' => ['raise', 'code_text', ['app' => 'job_conflict:']],
             'bracket ER' => ['raise', 'tag_er', ['app' => '[ER102]']],
             'bracket public' => ['raise', 'tag_public', ['app' => '[public:code:409]']],
+            'echo two parameters with marker' => ['echo_two', 'x', ['app' => null]],
             'sentence' => ['raise', 'sentence', ['app' => null]],
             'bare value Rahul' => ['raise', 'bare_value', ['app' => null, 'val' => 'Rahul']],
             'bare value jdoe' => ['raise', 'bare_value', ['app' => null, 'val' => 'jdoe']],
@@ -90,8 +91,11 @@ final class RealGatewayClientTest extends TestCase
             case 'notable':
                 $call = ['ghost_table_fn', []];
                 break;
+            case 'echo_two':
+                $call = ['echo_two', ['[public:x:409] attacker text', 'Alice Victim']];
+                break;
             default:
-                $call = ['raise_it', [$arg, $expect['val'] ?? $email]];
+                $call = [in_array($arg, ['bare_value', 'value_exists'], true) ? 'raise_unsafe' : 'raise_it', [$arg, $expect['val'] ?? $email]];
         }
         try {
             $client->callFunction($call[0], $call[1]);
