@@ -74,7 +74,7 @@ class GatewayClient
      * @return array Array of result rows
      * @throws GatewayException If the request fails
      */
-    public function callFunction(string $function_name, array $params = []): array
+    public function callFunction(string $function_name, #[\SensitiveParameter] array $params = []): array
     {
         $url = $this->gateway_url . '/call';
 
@@ -526,7 +526,7 @@ class GatewayClient
      * @return array The decoded JSON response
      * @throws GatewayException If the request fails
      */
-    private function httpPost(string $url, array $data, bool $with_admin_auth = false, ?int $timeout = null): array
+    private function httpPost(string $url, #[\SensitiveParameter] array $data, bool $with_admin_auth = false, ?int $timeout = null): array
     {
         $json_payload = json_encode($data);
 
@@ -597,7 +597,7 @@ class GatewayClient
      * @return array The decoded JSON response
      * @throws GatewayException If the request fails
      */
-    private function httpPostMultipart(string $url, string $body, string $boundary, int $timeout = 60): array
+    private function httpPostMultipart(string $url, #[\SensitiveParameter] string $body, string $boundary, int $timeout = 60): array
     {
         $ch = curl_init($url);
 
@@ -654,7 +654,7 @@ class GatewayClient
      *
      * @param string|false $response
      */
-    private function buildHttpError(int $http_code, $response, ?string $function_name): GatewayException
+    private function buildHttpError(int $http_code, #[\SensitiveParameter] $response, ?string $function_name): GatewayException
     {
         $error_body = null;
         if ($response !== false && $response !== '' && $response !== null) {
