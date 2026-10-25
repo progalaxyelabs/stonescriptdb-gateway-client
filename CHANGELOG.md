@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - 2026-10-25
+
+Patch: PHP 8.5 compatibility. No behaviour change; still `php >=8.1`.
+
+### Fixed
+- Removed the `curl_close()` calls (a no-op since PHP 8.0, deprecated in 8.5, which logged `E_DEPRECATED` on every gateway call).
+
 ## [4.0.0] - 2026-10-21
 
 MAJOR release (message contract change). Nothing changes for an application until it opts in to `^4.0`.

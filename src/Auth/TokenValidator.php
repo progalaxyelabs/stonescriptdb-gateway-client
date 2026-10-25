@@ -112,7 +112,6 @@ class TokenValidator
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error = curl_error($ch);
-            curl_close($ch);
 
             if ($response === false) {
                 throw new InvalidTokenException("Failed to fetch JWKS: $error");

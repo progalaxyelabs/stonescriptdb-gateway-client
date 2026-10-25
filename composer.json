@@ -11,7 +11,7 @@
         "multi-tenant",
         "stonescriptdb"
     ],
-    "version": "4.0.0",
+    "version": "4.0.1",
     "license": "MIT",
     "authors": [
         {

@@ -261,7 +261,6 @@ class GatewayNoLeakTest extends TestCase
         $this->assertStringNotContainsString('jane.sentinel', json_encode(get_object_vars($e)) ?: '');
         $rp = (new \ReflectionObject($e));
         foreach ($rp->getProperties() as $p) {
-            $p->setAccessible(true);
             if ($p->isStatic()) {
                 continue;
             }

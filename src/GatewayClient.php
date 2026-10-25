@@ -327,7 +327,6 @@ class GatewayClient
 
             $response = curl_exec($ch);
             $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
 
             return $http_code === 200;
         } catch (Exception $e) {
@@ -564,7 +563,6 @@ class GatewayClient
         $curl_error = curl_error($ch);
         $curl_errno = curl_errno($ch);
 
-        curl_close($ch);
 
         if ($curl_errno !== 0) {
             throw new GatewayException("Gateway request failed: $curl_error (errno: $curl_errno)");
@@ -622,7 +620,6 @@ class GatewayClient
         $curl_error = curl_error($ch);
         $curl_errno = curl_errno($ch);
 
-        curl_close($ch);
 
         if ($curl_errno !== 0) {
             throw new GatewayException("Gateway request failed: $curl_error (errno: $curl_errno)");
