@@ -15,6 +15,8 @@ Patch. Compatible with gateways before and after 4.9.
 - `migrateV2()` and `migrateAllV2()` accept an `$allow` list; when `force` is true or `$allow` is non-empty the admin token is sent in `X-Gateway-Admin-Token` (to the configured gateway URL only).
 - Hint text for HTTP 403 distinguishes an address refusal, a token for another platform, and a missing admin scope.
 - Redirects are never followed.
+- Any 2xx response is a success (the gateway answers database creation with 201 and an accepted migrate-all job with 202).
+- `createDatabase()` and `migrateV2()` take a nullable `$uuid`; `null` (the default) targets the main database and omits the field.
 
 ## [4.1.0] - 2026-11-06
 

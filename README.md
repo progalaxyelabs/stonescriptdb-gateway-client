@@ -108,7 +108,7 @@ echo "Functions in archive: " . ($upload['has_functions'] ? 'yes' : 'no') . "\n"
 
 // 2. Create the database from that stored schema (authenticated with the
 //    platform token; see "Authentication" below)
-$created = $client->createDatabase('v1.0', 'main');
+$created = $client->createDatabase('v1.0');   // null uuid = the main database
 echo "Functions deployed: " . $created['functions_deployed'] . "\n";
 ```
 
@@ -136,7 +136,7 @@ there is no single `migrate()` method:
 
 ```php
 // Migrate the main database to an already-uploaded schema version
-$response = $client->migrateV2('v1.0', 'main', force: false);
+$response = $client->migrateV2('v1.0', null, force: false);   // null = main database
 echo "Migrations applied: " . $response['migrations_applied'] . "\n";
 
 // Or migrate every tenant database at once
@@ -348,8 +348,8 @@ new GatewayClient(
 - `callFunction(string $name, array $params = []): array` - Call PostgreSQL function (`POST /call`)
 - `registerPlatform(): array` - Register this platform with the gateway, idempotent (`POST /platform/register`)
 - `uploadSchema(string $archivePath, string $schemaName): array` - Upload a `.tar.gz` schema archive (`POST /platform/{platform}/schema`)
-- `createDatabase(string $schemaName, string $uuid): array` - Create a database from a stored schema; uses the platform token (`POST /admin/database/create`)
-- `migrateV2(string $schemaName, string $uuid, bool $force = false, array $allow = []): array` - Migrate one database to a stored schema (`POST /v2/migrate`); `force`/`allow` also send the admin token
+- `createDatabase(string $schemaName, ?string $uuid = null): array` - Create a database from a stored schema; uses the platform token (`POST /admin/database/create`)
+- `migrateV2(string $schemaName, ?string $uuid = null, bool $force = false, array $allow = []): array` - Migrate one database to a stored schema (`POST /v2/migrate`); `force`/`allow` also send the admin token
 - `migrateAllV2(string $schemaName, bool $force = false, array $allow = []): array` - Migrate every database for the platform (`POST /v2/migrate-all`)
 - `healthCheck(): bool` - Check gateway health (`GET /health`)
 - `isConnected(): bool` - True once at least one request has succeeded

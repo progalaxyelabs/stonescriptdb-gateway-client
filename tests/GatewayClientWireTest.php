@@ -27,6 +27,8 @@ class GatewayClientWireTest extends TestCase
         file_put_contents(self::$dir . '/echo.php', '<?php
 header("Content-Type: application/json");
 $path = parse_url($_SERVER["REQUEST_URI"], PHP_URL_PATH);
+if ($path === "/admin/database/create") { http_response_code(201); }
+if ($path === "/v2/migrate-all") { http_response_code(202); }
 if ($path === "/health") { echo json_encode(["status"=>"healthy","hdr"=>$_SERVER["HTTP_AUTHORIZATION"] ?? null]); return; }
 if (str_starts_with($path, "/redirect/")) {
     http_response_code(302);
@@ -133,6 +135,23 @@ header("Content-Type: application/json"); echo json_encode(["rows"=>[]]);');
         $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main', 'main', false, ['drop_column']);
         $this->assertSame('atok', $r['admin_header']);
         $this->assertSame(['drop_column'], $r['body']['allow']);
+    }
+
+    public function testMainDatabaseCallsOmitTheUuid(): void
+    {
+        $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main');
+        $this->assertArrayNotHasKey('uuid', $r['body']);
+        $r = $this->raw($this->client('ptok', 'atok'), 'createDatabase', 'main');
+        $this->assertArrayNotHasKey('uuid', $r['body']);
+    }
+
+    public function testCreatedAndAcceptedResponsesAreSuccess(): void
+    {
+        // create answers 201 and migrate-all answers 202 (job accepted): both are successes
+        $r = $this->raw($this->client('ptok', null), 'createDatabase', 'tenant', 'u1');
+        $this->assertSame('u1', $r['body']['uuid']);
+        $r = $this->raw($this->client('ptok', null), 'migrateAllV2', 'tenant');
+        $this->assertSame('/v2/migrate-all', $r['path']);
     }
 
     public function testMigrateAllForceAndPlainCases(): void

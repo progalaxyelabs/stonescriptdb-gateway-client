@@ -229,11 +229,11 @@ class GatewayClient
      * unknown field is rejected by the gateway.
      *
      * @param string $schema_name Schema version to deploy
-     * @param string $uuid Database identifier ("main" or tenant UUID)
+     * @param string|null $uuid Tenant database identifier; null for the main (non-tenant) database
      * @return array Gateway response with deployment details
      * @throws GatewayException If creation fails
      */
-    public function createDatabase(string $schema_name, string $uuid): array
+    public function createDatabase(string $schema_name, ?string $uuid = null): array
     {
         $url = $this->gateway_url . '/admin/database/create';
         $payload = $this->buildCreateDatabasePayload($schema_name, $uuid);
@@ -250,13 +250,16 @@ class GatewayClient
      * tests can assert on the exact outgoing payload shape without a live
      * gateway.
      */
-    protected function buildCreateDatabasePayload(string $schema_name, string $uuid): array
+    protected function buildCreateDatabasePayload(string $schema_name, ?string $uuid): array
     {
-        return [
+        $payload = [
             'platform' => $this->platform,
             'schema_name' => $schema_name,
-            'uuid' => $uuid,
         ];
+        if ($uuid !== null) {
+            $payload['uuid'] = $uuid;
+        }
+        return $payload;
     }
 
     /**
@@ -271,13 +274,13 @@ class GatewayClient
      * `X-Gateway-Admin-Token` header, to the configured gateway URL only.
      *
      * @param string $schema_name Schema version to migrate to
-     * @param string $uuid Database identifier ("main" or tenant UUID)
+     * @param string|null $uuid Tenant database identifier; null for the main (non-tenant) database
      * @param bool $force Bypass DATALOSS safety checks
      * @param string[] $allow Granular guard overrides (e.g. "drop_column")
      * @return array Gateway response with migration details
      * @throws GatewayException If migration fails
      */
-    public function migrateV2(string $schema_name, string $uuid, bool $force = false, array $allow = []): array
+    public function migrateV2(string $schema_name, ?string $uuid = null, bool $force = false, array $allow = []): array
     {
         $url = $this->gateway_url . '/v2/migrate';
         $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force, $allow);
@@ -295,14 +298,16 @@ class GatewayClient
      *
      * @param string[] $allow
      */
-    protected function buildMigrateV2Payload(string $schema_name, string $uuid, bool $force, array $allow = []): array
+    protected function buildMigrateV2Payload(string $schema_name, ?string $uuid, bool $force, array $allow = []): array
     {
         $payload = [
             'platform' => $this->platform,
             'schema_name' => $schema_name,
-            'uuid' => $uuid,
             'force' => $force,
         ];
+        if ($uuid !== null) {
+            $payload['uuid'] = $uuid;
+        }
         if (!empty($allow)) {
             $payload['allow'] = array_values($allow);
         }
@@ -644,7 +649,7 @@ class GatewayClient
             throw new GatewayException("Gateway request failed: $curl_error (errno: $curl_errno)");
         }
 
-        if ($http_code !== 200) {
+        if ($http_code < 200 || $http_code >= 300) {
             throw $this->buildHttpError($http_code, $response, isset($data['function']) && is_string($data['function']) ? $data['function'] : null);
         }
 
@@ -716,7 +721,7 @@ class GatewayClient
             throw new GatewayException("Gateway request failed: $curl_error (errno: $curl_errno)");
         }
 
-        if ($http_code !== 200) {
+        if ($http_code < 200 || $http_code >= 300) {
             throw $this->buildHttpError($http_code, $response, null);
         }
 
