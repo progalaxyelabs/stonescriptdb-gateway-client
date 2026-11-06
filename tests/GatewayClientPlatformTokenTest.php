@@ -8,15 +8,16 @@ use StoneScriptDB\GatewayException;
 
 class GatewayClientPlatformTokenTest extends TestCase
 {
-    private function client(?string $platformToken, ?string $adminToken = null): object
+    private function client(?string $platformToken, ?string $adminToken = null, ?string $deployToken = null): object
     {
-        $c = new GatewayClient('http://gateway:9000', 'myapp', 'main', null, null, $adminToken, $platformToken);
+        $c = new GatewayClient('http://gateway:9000', 'myapp', 'main', null, null, $adminToken, $platformToken, $deployToken);
         return new class($c) {
             public function __construct(private GatewayClient $c) {}
-            public function header(bool $admin): ?string
+            public function header(bool|string $kind): ?string
             {
                 $m = new \ReflectionMethod($this->c, 'buildAuthorizationHeader');
-                return $m->invoke($this->c, $admin ? 'admin_preferred' : 'platform');
+                $cred = is_string($kind) ? $kind : ($kind ? 'admin_preferred' : 'platform');
+                return $m->invoke($this->c, $cred);
             }
             public function inner(): GatewayClient { return $this->c; }
         };
@@ -40,9 +41,34 @@ class GatewayClientPlatformTokenTest extends TestCase
         $this->assertSame('Authorization: Bearer ptok', $c->header(false));
     }
 
-    public function testAdminEndpointFallsBackToPlatformToken(): void
+    public function testAdminEndpointFallsBackToDeployTokenNotRuntime(): void
     {
-        $this->assertSame('Authorization: Bearer ptok', $this->client('ptok')->header(true));
+        $this->assertSame('Authorization: Bearer dtok', $this->client('ptok', null, 'dtok')->header(true));
+        $this->assertNull($this->client('ptok')->header(true));
+    }
+
+    public function testEachCredentialKindPicksItsOwnToken(): void
+    {
+        $c = $this->client('ptok', 'atok', 'dtok');
+        $this->assertSame('Authorization: Bearer ptok', $c->header('platform'));
+        $this->assertSame('Authorization: Bearer ptok', $c->header('runtime_preferred'));
+        $this->assertSame('Authorization: Bearer dtok', $c->header('deploy'));
+        $this->assertSame('Authorization: Bearer atok', $c->header('admin_preferred'));
+        $d = $this->client(null, null, 'dtok');
+        $this->assertNull($d->header('platform'));
+        $this->assertSame('Authorization: Bearer dtok', $d->header('runtime_preferred'));
+        $this->assertNull($this->client('ptok')->header('deploy'));
+    }
+
+    public function testDeploySetterPresenceFlagAndNoDump(): void
+    {
+        $c = $this->client(null);
+        $this->assertFalse($c->inner()->hasDeployToken());
+        $c->inner()->setDeployToken('dtok-secret');
+        $this->assertTrue($c->inner()->hasDeployToken());
+        $this->assertStringNotContainsString('dtok-secret', print_r($c->inner(), true));
+        $c->inner()->setDeployToken('');
+        $this->assertFalse($c->inner()->hasDeployToken());
     }
 
     public function testSetterAndPresenceFlag(): void

@@ -70,9 +70,9 @@ header("Content-Type: application/json"); echo json_encode(["rows"=>[]]);');
         @rmdir(self::$dir);
     }
 
-    private function client(?string $platformToken, ?string $adminToken): GatewayClient
+    private function client(?string $platformToken, ?string $adminToken, ?string $deployToken = null): GatewayClient
     {
-        return new GatewayClient('http://127.0.0.1:' . self::$port, 'myapp', 'main', 'tenant', null, $adminToken, $platformToken);
+        return new GatewayClient('http://127.0.0.1:' . self::$port, 'myapp', 'main', 'tenant', null, $adminToken, $platformToken, $deployToken);
     }
 
     private function archive(): string
@@ -82,102 +82,121 @@ header("Content-Type: application/json"); echo json_encode(["rows"=>[]]);');
         return $f;
     }
 
-    public function testCallFunctionSendsPlatformTokenOnly(): void
+    public function testCallFunctionSendsRuntimeTokenOnly(): void
     {
-        $rows = $this->client('ptok', 'atok')->callFunction('f', []);
+        $rows = $this->client('ptok', 'atok', 'dtok')->callFunction('f', []);
         $this->assertSame('Bearer ptok', $rows[0]['authorization']);
         $this->assertNull($rows[0]['admin_header']);
     }
 
+    public function testCallFunctionNeverFallsBackToTheDeployToken(): void
+    {
+        $rows = $this->client(null, 'atok', 'dtok')->callFunction('f', []);
+        $this->assertNull($rows[0]['authorization']);
+    }
+
     public function testRegisterPlatformUsesAdminCredentialWhenSet(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'registerPlatform');
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'registerPlatform');
         $this->assertSame('/platform/register', $r['path']);
         $this->assertSame('Bearer atok', $r['authorization']);
         $this->assertSame(['platform' => 'myapp'], $r['body']);
     }
 
-    public function testRegisterPlatformFallsBackToPlatformToken(): void
+    public function testRegisterPlatformFallsBackToDeployTokenNeverRuntime(): void
     {
-        $r = $this->raw($this->client('ptok', null), 'registerPlatform');
-        $this->assertSame('Bearer ptok', $r['authorization']);
+        $r = $this->raw($this->client('ptok', null, 'dtok'), 'registerPlatform');
+        $this->assertSame('Bearer dtok', $r['authorization']);
+        $r = $this->raw($this->client('ptok', null, null), 'registerPlatform');
+        $this->assertNull($r['authorization']);
     }
 
-    public function testCreateDatabaseUsesPlatformTokenNeverAdminToken(): void
+    public function testCreateTenantDatabaseUsesRuntimeTokenNeverAdminToken(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'createDatabase', 'main', 'main');
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'createDatabase', 'tenant', 'u1');
         $this->assertSame('/admin/database/create', $r['path']);
         $this->assertSame('Bearer ptok', $r['authorization']);
         $this->assertNull($r['admin_header']);
-        $this->assertSame('main', $r['body']['uuid']);
+        $this->assertSame('u1', $r['body']['uuid']);
     }
 
-    public function testMigrateWithoutOverridesSendsNoAdminHeader(): void
+    public function testCreateTenantDatabaseFallsBackToDeployTokenWhenNoRuntimeToken(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main', 'main');
+        $r = $this->raw($this->client(null, null, 'dtok'), 'createDatabase', 'tenant', 'u1');
+        $this->assertSame('Bearer dtok', $r['authorization']);
+    }
+
+    public function testCreateMainDatabaseUsesDeployToken(): void
+    {
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'createDatabase', 'main');
+        $this->assertSame('Bearer dtok', $r['authorization']);
+        $this->assertNull($r['admin_header']);
+        $this->assertArrayNotHasKey('uuid', $r['body']);
+    }
+
+    public function testMigrateMainUsesDeployTokenWithoutAdminHeader(): void
+    {
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateV2', 'main');
         $this->assertSame('/v2/migrate', $r['path']);
-        $this->assertSame('Bearer ptok', $r['authorization']);
+        $this->assertSame('Bearer dtok', $r['authorization']);
         $this->assertNull($r['admin_header']);
         $this->assertFalse($r['body']['force']);
         $this->assertArrayNotHasKey('allow', $r['body']);
+        $this->assertArrayNotHasKey('uuid', $r['body']);
     }
 
-    public function testMigrateForceSendsAdminHeader(): void
+    public function testMigrateNewTenantUsesRuntimeToken(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main', 'main', true);
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateV2', 'tenant', 'u1');
         $this->assertSame('Bearer ptok', $r['authorization']);
+        $this->assertNull($r['admin_header']);
+        $this->assertSame('u1', $r['body']['uuid']);
+    }
+
+    public function testMigrateForceSendsDeployTokenAndAdminHeader(): void
+    {
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateV2', 'tenant', 'u1', true);
+        $this->assertSame('Bearer dtok', $r['authorization']);
         $this->assertSame('atok', $r['admin_header']);
         $this->assertTrue($r['body']['force']);
     }
 
-    public function testMigrateAllowSendsAdminHeaderAndList(): void
+    public function testMigrateAllowSendsDeployTokenAdminHeaderAndList(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main', 'main', false, ['drop_column']);
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateV2', 'main', null, false, ['drop_column']);
+        $this->assertSame('Bearer dtok', $r['authorization']);
         $this->assertSame('atok', $r['admin_header']);
         $this->assertSame(['drop_column'], $r['body']['allow']);
     }
 
-    public function testMainDatabaseCallsOmitTheUuid(): void
+    public function testMigrateAllUsesDeployToken(): void
     {
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateV2', 'main');
-        $this->assertArrayNotHasKey('uuid', $r['body']);
-        $r = $this->raw($this->client('ptok', 'atok'), 'createDatabase', 'main');
-        $this->assertArrayNotHasKey('uuid', $r['body']);
-    }
-
-    public function testCreatedAndAcceptedResponsesAreSuccess(): void
-    {
-        // create answers 201 and migrate-all answers 202 (job accepted): both are successes
-        $r = $this->raw($this->client('ptok', null), 'createDatabase', 'tenant', 'u1');
-        $this->assertSame('u1', $r['body']['uuid']);
-        $r = $this->raw($this->client('ptok', null), 'migrateAllV2', 'tenant');
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateAllV2', 'tenant');
         $this->assertSame('/v2/migrate-all', $r['path']);
-    }
-
-    public function testMigrateAllForceAndPlainCases(): void
-    {
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateAllV2', 'main', true);
-        $this->assertSame('/v2/migrate-all', $r['path']);
-        $this->assertSame('atok', $r['admin_header']);
-        $r = $this->raw($this->client('ptok', 'atok'), 'migrateAllV2', 'main');
+        $this->assertSame('Bearer dtok', $r['authorization']);
         $this->assertNull($r['admin_header']);
-        $this->assertSame('Bearer ptok', $r['authorization']);
+        $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateAllV2', 'main', true);
+        $this->assertSame('atok', $r['admin_header']);
+        $this->assertSame('Bearer dtok', $r['authorization']);
     }
 
     public function testForceWithoutAdminTokenSendsNoAdminHeader(): void
     {
-        $r = $this->raw($this->client('ptok', null), 'migrateV2', 'main', 'main', true);
+        $r = $this->raw($this->client('ptok', null, 'dtok'), 'migrateV2', 'main', null, true);
         $this->assertNull($r['admin_header']);
     }
 
-    public function testUploadSchemaUsesPlatformToken(): void
+    public function testUploadSchemaUsesDeployToken(): void
     {
         $f = $this->archive();
         try {
-            $r = $this->raw($this->client('ptok', 'atok'), 'uploadSchema', $f, 'main');
+            $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'uploadSchema', $f, 'main');
             $this->assertSame('/platform/myapp/schema', $r['path']);
-            $this->assertSame('Bearer ptok', $r['authorization']);
+            $this->assertSame('Bearer dtok', $r['authorization']);
             $this->assertNull($r['admin_header']);
+            // a client holding only the runtime token sends no credential here
+            $r = $this->raw($this->client('ptok', 'atok', null), 'uploadSchema', $f, 'main');
+            $this->assertNull($r['authorization']);
         } finally {
             @unlink($f);
         }
@@ -191,7 +210,7 @@ header("Content-Type: application/json"); echo json_encode(["rows"=>[]]);');
     public function testRedirectsAreNotFollowedAndCredentialsDoNotLeave(): void
     {
         @unlink(self::$hitLog);
-        $c = new GatewayClient('http://127.0.0.1:' . self::$port . '/redirect', 'myapp', 'main', null, null, 'atok', 'ptok');
+        $c = new GatewayClient('http://127.0.0.1:' . self::$port . '/redirect', 'myapp', 'main', null, null, 'atok', 'ptok', 'dtok');
         try {
             $c->migrateV2('main', 'main', true);
             $this->fail('a redirect must not be treated as success');

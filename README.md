@@ -114,20 +114,27 @@ echo "Functions deployed: " . $created['functions_deployed'] . "\n";
 
 ### Authentication
 
-Gateway 4.9 and later authenticate every request:
+Gateway 4.9 and later authenticate every request; gateway 4.10 and later
+distinguish two token scopes:
 
 | Request | Credential |
 |---|---|
-| `callFunction`, `uploadSchema`, `createDatabase`, `migrateV2`, `migrateAllV2` | platform token (`Authorization: Bearer`) |
-| `registerPlatform` | admin token when set (a new platform has no token yet), otherwise the platform token |
-| `migrateV2` / `migrateAllV2` with `force` or `allow` | platform token, plus the admin token in the `X-Gateway-Admin-Token` header |
+| `callFunction` | runtime token |
+| `createDatabase` / `migrateV2` for a new tenant database (uuid given, no force/allow) | runtime token (deploy token if no runtime token is set) |
+| `uploadSchema`, `migrateAllV2`, `createDatabase` / `migrateV2` for the main database or an existing one | deploy token |
+| `registerPlatform` | admin token when set (a new platform has no token yet), otherwise the deploy token |
+| `migrateV2` / `migrateAllV2` with `force` or `allow` | deploy token, plus the admin token in the `X-Gateway-Admin-Token` header |
 | `healthCheck` | none |
 
-Pass the platform token as the seventh constructor argument or with
-`setPlatformToken()`; pass the admin token with `setAdminToken()`. The admin
-token is sent only to the configured gateway URL, redirects are not followed,
-and neither token appears in exception messages, `getLastError()` or
-`var_dump()` output. Older gateways ignore the extra headers.
+The application server holds the runtime token only: pass it as the seventh
+constructor argument or with `setPlatformToken()`. The deploy token belongs to
+the deploy manager: pass it as the eighth constructor argument or with
+`setDeployToken()`, and keep it out of the application's environment files.
+Pass the admin token with `setAdminToken()`. The admin token is sent only to the
+configured gateway URL, redirects are not followed, and no token appears in
+exception messages, `getLastError()` or `var_dump()` output. Gateways before
+4.10 treat every token as one platform token, so a single token passed either
+way keeps working.
 
 ### Hot Schema Migration
 

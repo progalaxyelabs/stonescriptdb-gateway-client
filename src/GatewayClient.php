@@ -22,11 +22,18 @@ class GatewayClient
     private ?string $base_schema_name;
     private ?string $tenant_schema_name;
     private ?string $admin_token;
+    /** Runtime-scope token: held by the application server. */
     private ?string $platform_token = null;
+    /** Deploy-scope token: held only by the deploy manager. */
+    private ?string $deploy_token = null;
 
-    /** Send the platform token. */
+    /** Runtime token (`/call`, new tenant databases). */
     private const CRED_PLATFORM = 'platform';
-    /** Send the admin token when configured, otherwise the platform token. */
+    /** Runtime token when set, else the deploy token (new tenant create/migrate). */
+    private const CRED_RUNTIME_PREFERRED = 'runtime_preferred';
+    /** Deploy token only (upload, migrate-all, main database, guard overrides). */
+    private const CRED_DEPLOY = 'deploy';
+    /** Admin token when set, else the deploy token (platform registration). */
     private const CRED_ADMIN_PREFERRED = 'admin_preferred';
     private bool $connected = false;
     private ?string $last_error = null;
@@ -43,7 +50,8 @@ class GatewayClient
      * @param string|null $tenant_schema_name Tenant schema name (e.g. "tenant"). Required only for multi-tenant platforms.
      * @param string|null $uuid Tenant UUID for tenant databases; null for the base schema
      * @param string|null $admin_token Optional admin token for /admin/* endpoints
-     * @param string|null $platform_token Optional platform token, sent as a Bearer credential on every request except the health check
+     * @param string|null $platform_token Optional runtime-scope token (held by the app server): `/call` and new tenant databases
+     * @param string|null $deploy_token Optional deploy-scope token (held by the deploy manager only): registration, schema upload, migrations
      */
     public function __construct(
         string $gateway_url,
@@ -52,7 +60,8 @@ class GatewayClient
         ?string $tenant_schema_name = null,
         ?string $uuid = null,
         ?string $admin_token = null,
-        #[\SensitiveParameter] ?string $platform_token = null
+        #[\SensitiveParameter] ?string $platform_token = null,
+        #[\SensitiveParameter] ?string $deploy_token = null
     ) {
         if (!extension_loaded('curl')) {
             throw new Exception('GatewayClient requires the curl extension');
@@ -73,6 +82,7 @@ class GatewayClient
         $this->uuid = $uuid;
         $this->admin_token = $admin_token;
         $this->platform_token = ($platform_token !== null && $platform_token !== '') ? $platform_token : null;
+        $this->deploy_token = ($deploy_token !== null && $deploy_token !== '') ? $deploy_token : null;
     }
 
     /**
@@ -81,7 +91,7 @@ class GatewayClient
     public function __debugInfo(): array
     {
         $props = get_object_vars($this);
-        foreach (['admin_token', 'platform_token'] as $k) {
+        foreach (['admin_token', 'platform_token', 'deploy_token'] as $k) {
             if ($props[$k] !== null) {
                 $props[$k] = '<redacted>';
             }
@@ -157,8 +167,8 @@ class GatewayClient
      * POST /platform/register
      *
      * Credential: the admin token when one is set (a new platform has no
-     * platform token yet); otherwise the platform token (re-registering an
-     * existing platform).
+     * token yet); otherwise the deploy token (re-registering an existing
+     * platform).
      *
      * @return array Gateway response
      * @throws GatewayException If registration fails
@@ -222,7 +232,10 @@ class GatewayClient
      * Create a database from a stored schema.
      *
      * POST /admin/database/create
-     * Authenticated with the platform token (never the admin token).
+     * A tenant database (`$uuid` given) is created with the runtime token
+     * (the sign-up path; the deploy token is used when no runtime token is
+     * set). The main database (`$uuid` null) is a deploy step: deploy token.
+     * The admin token is never used here.
      *
      * The gateway's create request only deserializes a `uuid` field (there is
      * no `database_id`), so the payload always carries `uuid`; sending an
@@ -238,7 +251,8 @@ class GatewayClient
         $url = $this->gateway_url . '/admin/database/create';
         $payload = $this->buildCreateDatabasePayload($schema_name, $uuid);
 
-        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM);
+        $credential = $uuid !== null ? self::CRED_RUNTIME_PREFERRED : self::CRED_DEPLOY;
+        $response = $this->httpPost($url, $payload, $credential);
         $this->connected = true;
         $this->last_error = null;
 
@@ -269,9 +283,12 @@ class GatewayClient
      *
      * Same contract as createDatabase(): the payload carries `uuid`.
      *
-     * Authenticated with the platform token. When `$force` is true or `$allow`
-     * is non-empty the admin token (if configured) is also sent, in the
-     * `X-Gateway-Admin-Token` header, to the configured gateway URL only.
+     * Migrating a NEW tenant database (`$uuid` given, no force/allow) uses the
+     * runtime token (deploy token if no runtime token is set). Everything else
+     * (the main database, existing databases, force/allow) uses the deploy
+     * token. When `$force` is true or `$allow` is non-empty the admin token (if
+     * configured) is also sent, in the `X-Gateway-Admin-Token` header, to the
+     * configured gateway URL only.
      *
      * @param string $schema_name Schema version to migrate to
      * @param string|null $uuid Tenant database identifier; null for the main (non-tenant) database
@@ -285,7 +302,9 @@ class GatewayClient
         $url = $this->gateway_url . '/v2/migrate';
         $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force, $allow);
 
-        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM, 120, $force || !empty($allow));
+        $override = $force || !empty($allow);
+        $credential = ($uuid !== null && !$override) ? self::CRED_RUNTIME_PREFERRED : self::CRED_DEPLOY;
+        $response = $this->httpPost($url, $payload, $credential, 120, $override);
         $this->connected = true;
         $this->last_error = null;
 
@@ -338,7 +357,7 @@ class GatewayClient
             $payload['allow'] = array_values($allow);
         }
 
-        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM, 300, $force || !empty($allow));
+        $response = $this->httpPost($url, $payload, self::CRED_DEPLOY, 300, $force || !empty($allow));
         $this->connected = true;
         $this->last_error = null;
 
@@ -527,6 +546,26 @@ class GatewayClient
     }
 
     /**
+     * Set the deploy-scope token (deploy manager only; never an app server).
+     *
+     * @param string|null $token Deploy token (null or empty disables it)
+     * @return self For method chaining
+     */
+    public function setDeployToken(#[\SensitiveParameter] ?string $token): self
+    {
+        $this->deploy_token = ($token !== null && $token !== '') ? $token : null;
+        return $this;
+    }
+
+    /**
+     * Whether a deploy token is configured (the token itself is never exposed).
+     */
+    public function hasDeployToken(): bool
+    {
+        return $this->deploy_token !== null;
+    }
+
+    /**
      * Whether a platform token is configured (the token itself is never exposed).
      */
     public function hasPlatformToken(): bool
@@ -537,18 +576,21 @@ class GatewayClient
     /**
      * Build the Authorization header line, or null when no credential applies.
      *
-     * - CRED_PLATFORM: the platform token.
-     * - CRED_ADMIN_PREFERRED: the admin token when set, else the platform token.
+     * - CRED_PLATFORM: the runtime token.
+     * - CRED_RUNTIME_PREFERRED: the runtime token when set, else the deploy token.
+     * - CRED_DEPLOY: the deploy token.
+     * - CRED_ADMIN_PREFERRED: the admin token when set, else the deploy token.
      */
     protected function buildAuthorizationHeader(string $credential = self::CRED_PLATFORM): ?string
     {
-        if ($credential === self::CRED_ADMIN_PREFERRED && $this->admin_token) {
-            return 'Authorization: Bearer ' . $this->admin_token;
-        }
-        if ($this->platform_token !== null) {
-            return 'Authorization: Bearer ' . $this->platform_token;
-        }
-        return null;
+        $token = match ($credential) {
+            self::CRED_PLATFORM => $this->platform_token,
+            self::CRED_RUNTIME_PREFERRED => $this->platform_token ?? $this->deploy_token,
+            self::CRED_DEPLOY => $this->deploy_token,
+            self::CRED_ADMIN_PREFERRED => ($this->admin_token ?: null) ?? $this->deploy_token,
+            default => null,
+        };
+        return $token !== null ? 'Authorization: Bearer ' . $token : null;
     }
 
     /**
@@ -650,7 +692,7 @@ class GatewayClient
         }
 
         if ($http_code < 200 || $http_code >= 300) {
-            throw $this->buildHttpError($http_code, $response, isset($data['function']) && is_string($data['function']) ? $data['function'] : null);
+            throw $this->buildHttpError($http_code, $response, isset($data['function']) && is_string($data['function']) ? $data['function'] : null, $credential);
         }
 
         if ($response === false || $response === '') {
@@ -696,7 +738,7 @@ class GatewayClient
             "Content-Type: multipart/form-data; boundary={$boundary}",
             'Content-Length: ' . strlen($body)
         ];
-        $auth = $this->buildAuthorizationHeader(self::CRED_PLATFORM);
+        $auth = $this->buildAuthorizationHeader(self::CRED_DEPLOY);
         if ($auth !== null) {
             $mp_headers[] = $auth;
         }
@@ -722,7 +764,7 @@ class GatewayClient
         }
 
         if ($http_code < 200 || $http_code >= 300) {
-            throw $this->buildHttpError($http_code, $response, null);
+            throw $this->buildHttpError($http_code, $response, null, self::CRED_DEPLOY);
         }
 
         if ($response === false || $response === '') {
@@ -747,7 +789,7 @@ class GatewayClient
      *
      * @param string|false $response
      */
-    private function buildHttpError(int $http_code, #[\SensitiveParameter] $response, ?string $function_name): GatewayException
+    private function buildHttpError(int $http_code, #[\SensitiveParameter] $response, ?string $function_name, string $credential = self::CRED_PLATFORM): GatewayException
     {
         $error_body = null;
         if ($response !== false && $response !== '' && $response !== null) {
@@ -773,10 +815,17 @@ class GatewayClient
         $message .= GatewayException::formatSafeSuffix($ctx);
         $code = is_string($error_body['error'] ?? null) ? $error_body['error'] : '';
         if ($http_code === 401) {
-            $message .= ' — the gateway requires a valid platform token (set DB_GATEWAY_PLATFORM_TOKEN)';
+            $message .= match ($credential) {
+                self::CRED_DEPLOY => ' — the gateway requires a valid deploy token (the deploy manager supplies DB_GATEWAY_DEPLOY_TOKEN)',
+                self::CRED_ADMIN_PREFERRED => ' — the gateway requires the admin token or a valid deploy token for this step',
+                self::CRED_RUNTIME_PREFERRED => ' — the gateway requires a valid runtime token (set DB_GATEWAY_PLATFORM_TOKEN)',
+                default => ' — the gateway requires a valid platform token (set DB_GATEWAY_PLATFORM_TOKEN)',
+            };
         } elseif ($http_code === 403) {
             if ($code === 'platform_isolation_violation') {
                 $message .= ' — the platform token belongs to a different platform than the one named in the request';
+            } elseif ($code === 'scope_not_permitted') {
+                $message .= ' — this token\'s scope does not allow this operation (runtime tokens serve /call and new tenant databases; deploy tokens are for the deploy manager)';
             } elseif ($code === 'admin_scope_required') {
                 $message .= ' — force/allow need the gateway admin token (set DB_GATEWAY_ADMIN_TOKEN)';
             } elseif ($code === 'unauthorized') {

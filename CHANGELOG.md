@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-11-06
+
+Compatible with gateways before and after 4.10.
+
+### Added
+- Deploy-scope token: eighth constructor argument, `setDeployToken()`, `hasDeployToken()`.
+
+### Changed
+- The credential follows the call type: runtime token for `callFunction` and new tenant databases; deploy token for schema upload, `migrateAllV2`, the main database and existing databases; admin header only for force/allow.
+- Hint texts for 401/403 name the token that was needed, including `scope_not_permitted`.
+
 ## [4.1.1] - 2026-11-06
 
 Patch. Compatible with gateways before and after 4.9.
