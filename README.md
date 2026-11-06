@@ -106,12 +106,28 @@ $client = new GatewayClient('http://gateway:9000', 'myapp', schema_name: 'main')
 $upload = $client->uploadSchema('/path/to/schema.tar.gz', 'v1.0');
 echo "Functions in archive: " . ($upload['has_functions'] ? 'yes' : 'no') . "\n";
 
-// 2. Create the database from that stored schema (requires an admin token —
-//    see setAdminToken() below)
-$client->setAdminToken(getenv('GATEWAY_ADMIN_TOKEN'));
+// 2. Create the database from that stored schema (authenticated with the
+//    platform token; see "Authentication" below)
 $created = $client->createDatabase('v1.0', 'main');
 echo "Functions deployed: " . $created['functions_deployed'] . "\n";
 ```
+
+### Authentication
+
+Gateway 4.9 and later authenticate every request:
+
+| Request | Credential |
+|---|---|
+| `callFunction`, `uploadSchema`, `createDatabase`, `migrateV2`, `migrateAllV2` | platform token (`Authorization: Bearer`) |
+| `registerPlatform` | admin token when set (a new platform has no token yet), otherwise the platform token |
+| `migrateV2` / `migrateAllV2` with `force` or `allow` | platform token, plus the admin token in the `X-Gateway-Admin-Token` header |
+| `healthCheck` | none |
+
+Pass the platform token as the seventh constructor argument or with
+`setPlatformToken()`; pass the admin token with `setAdminToken()`. The admin
+token is sent only to the configured gateway URL, redirects are not followed,
+and neither token appears in exception messages, `getLastError()` or
+`var_dump()` output. Older gateways ignore the extra headers.
 
 ### Hot Schema Migration
 
@@ -322,7 +338,8 @@ new GatewayClient(
     ?string $schema_name = null,        // required — throws if empty
     ?string $tenant_schema_name = null, // required only if you ever call setTenantId()
     ?string $uuid = null,
-    ?string $admin_token = null
+    ?string $admin_token = null,
+    ?string $platform_token = null      // sent as Authorization: Bearer on gateway requests
 )
 ```
 
@@ -331,9 +348,9 @@ new GatewayClient(
 - `callFunction(string $name, array $params = []): array` - Call PostgreSQL function (`POST /call`)
 - `registerPlatform(): array` - Register this platform with the gateway, idempotent (`POST /platform/register`)
 - `uploadSchema(string $archivePath, string $schemaName): array` - Upload a `.tar.gz` schema archive (`POST /platform/{platform}/schema`)
-- `createDatabase(string $schemaName, string $uuid): array` - Create a database from a stored schema; requires an admin token (`POST /admin/database/create`)
-- `migrateV2(string $schemaName, string $uuid, bool $force = false): array` - Migrate one database to a stored schema (`POST /v2/migrate`)
-- `migrateAllV2(string $schemaName, bool $force = false): array` - Migrate every database for the platform (`POST /v2/migrate-all`)
+- `createDatabase(string $schemaName, string $uuid): array` - Create a database from a stored schema; uses the platform token (`POST /admin/database/create`)
+- `migrateV2(string $schemaName, string $uuid, bool $force = false, array $allow = []): array` - Migrate one database to a stored schema (`POST /v2/migrate`); `force`/`allow` also send the admin token
+- `migrateAllV2(string $schemaName, bool $force = false, array $allow = []): array` - Migrate every database for the platform (`POST /v2/migrate-all`)
 - `healthCheck(): bool` - Check gateway health (`GET /health`)
 - `isConnected(): bool` - True once at least one request has succeeded
 - `getLastError(): ?string` - Get last error message
@@ -342,7 +359,8 @@ new GatewayClient(
 - `setSchemaName(?string $schemaName): self` / `getSchemaName(): ?string` - Get/set the schema name used on the next call
 - `setUuid(?string $uuid): self` / `getUuid(): ?string` - Get/set the UUID used on the next call
 - `setPlatform(?string $platform): self` / `getPlatform(): ?string` - Get/set platform
-- `setAdminToken(?string $token): self` - Set the bearer token used for `/admin/*` endpoints
+- `setAdminToken(?string $token): self` - Set the admin token (platform registration; `force`/`allow` migrations)
+- `setPlatformToken(?string $token): self` / `hasPlatformToken(): bool` - Set / check the platform token
 - `setTimeout(int $seconds): self` - Set request timeout
 - `setConnectTimeout(int $seconds): self` - Set connection timeout
 - `setDebug(bool $enabled): self` - Enable/disable debug logging

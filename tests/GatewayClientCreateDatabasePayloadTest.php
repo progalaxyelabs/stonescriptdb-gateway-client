@@ -6,20 +6,9 @@ use PHPUnit\Framework\TestCase;
 use StoneScriptDB\GatewayClient;
 
 /**
- * Regression coverage for task #3165 — the ghost-tenant framework bug.
- *
- * ROOT CAUSE: GatewayClient::createDatabase() and ::migrateV2() POSTed a JSON
- * body with key `database_id`. The gateway's Rust request structs
- * (stonescriptdb-gateway src/api/database.rs CreateDatabaseRequest,
- * src/api/migrate.rs MigrateRequest) only recognize `uuid: Option<String>` —
- * there is no `database_id` field. Serde silently dropped the unrecognized
- * key (no deny_unknown_fields at the time), so `uuid` always deserialized to
- * None and every tenant's database collapsed onto the shared
- * `{platform}_{schema_name}` base database instead of its own per-tenant
- * `{platform}_{schema_name}_{uuid}` database ("ghost tenants").
- *
- * These tests pin the outgoing payload shape for both methods: `uuid` must be
- * present with the caller-supplied value, and `database_id` must never appear.
+ * Pins the outgoing payload shape of createDatabase() and migrateV2(): `uuid`
+ * must be present with the caller-supplied value, and `database_id` must never
+ * appear (the gateway only recognises `uuid`).
  */
 class GatewayClientCreateDatabasePayloadTest extends TestCase
 {
@@ -40,7 +29,7 @@ class GatewayClientCreateDatabasePayloadTest extends TestCase
         $this->assertArrayNotHasKey(
             'database_id',
             $payload,
-            'Regression (#3165): payload must never carry database_id — the gateway\'s ' .
+            'payload must never carry database_id — the gateway\'s ' .
             'CreateDatabaseRequest struct does not have that field and silently drops ' .
             'it, defaulting uuid to None (the ghost-tenant root cause).'
         );
@@ -64,7 +53,7 @@ class GatewayClientCreateDatabasePayloadTest extends TestCase
         $this->assertArrayNotHasKey(
             'database_id',
             $payload,
-            'Regression (#3165): payload must never carry database_id — the gateway\'s ' .
+            'payload must never carry database_id — the gateway\'s ' .
             'MigrateRequest struct does not have that field and silently drops it, ' .
             'defaulting uuid to None.'
         );

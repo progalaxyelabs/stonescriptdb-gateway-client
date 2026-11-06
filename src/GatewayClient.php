@@ -23,6 +23,11 @@ class GatewayClient
     private ?string $tenant_schema_name;
     private ?string $admin_token;
     private ?string $platform_token = null;
+
+    /** Send the platform token. */
+    private const CRED_PLATFORM = 'platform';
+    /** Send the admin token when configured, otherwise the platform token. */
+    private const CRED_ADMIN_PREFERRED = 'admin_preferred';
     private bool $connected = false;
     private ?string $last_error = null;
     private int $timeout = 30;
@@ -151,6 +156,10 @@ class GatewayClient
      *
      * POST /platform/register
      *
+     * Credential: the admin token when one is set (a new platform has no
+     * platform token yet); otherwise the platform token (re-registering an
+     * existing platform).
+     *
      * @return array Gateway response
      * @throws GatewayException If registration fails
      */
@@ -162,7 +171,7 @@ class GatewayClient
             'platform' => $this->platform,
         ];
 
-        $response = $this->httpPost($url, $payload);
+        $response = $this->httpPost($url, $payload, self::CRED_ADMIN_PREFERRED);
         $this->connected = true;
         $this->last_error = null;
 
@@ -213,17 +222,11 @@ class GatewayClient
      * Create a database from a stored schema.
      *
      * POST /admin/database/create
-     * Requires ADMIN_TOKEN.
+     * Authenticated with the platform token (never the admin token).
      *
-     * IMPORTANT (regression guard, task #3165): the gateway's Rust
-     * CreateDatabaseRequest struct (stonescriptdb-gateway src/api/database.rs)
-     * only deserializes a `uuid` field — it has no `database_id` field. This
-     * method used to send `database_id`, which serde silently dropped (no
-     * deny_unknown_fields at the time), leaving uuid=None on every call. Every
-     * tenant then collapsed onto the shared `{platform}_{schema_name}` base
-     * database instead of getting its own `{platform}_{schema_name}_{uuid}`
-     * database ("ghost tenants" — active tenant rows with no real per-tenant
-     * DB). Always send `uuid`, never `database_id`.
+     * The gateway's create request only deserializes a `uuid` field (there is
+     * no `database_id`), so the payload always carries `uuid`; sending an
+     * unknown field is rejected by the gateway.
      *
      * @param string $schema_name Schema version to deploy
      * @param string $uuid Database identifier ("main" or tenant UUID)
@@ -235,7 +238,7 @@ class GatewayClient
         $url = $this->gateway_url . '/admin/database/create';
         $payload = $this->buildCreateDatabasePayload($schema_name, $uuid);
 
-        $response = $this->httpPost($url, $payload, true);
+        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM);
         $this->connected = true;
         $this->last_error = null;
 
@@ -244,8 +247,8 @@ class GatewayClient
 
     /**
      * Build the /admin/database/create payload. Extracted (protected) so unit
-     * tests can assert on the exact outgoing payload shape (regression guard
-     * for task #3165) without a live gateway.
+     * tests can assert on the exact outgoing payload shape without a live
+     * gateway.
      */
     protected function buildCreateDatabasePayload(string $schema_name, string $uuid): array
     {
@@ -261,23 +264,25 @@ class GatewayClient
      *
      * POST /v2/migrate
      *
-     * IMPORTANT (regression guard, task #3165): same contract as
-     * createDatabase() above — the gateway's MigrateRequest struct
-     * (stonescriptdb-gateway src/api/migrate.rs) only deserializes `uuid`, not
-     * `database_id`. Always send `uuid`.
+     * Same contract as createDatabase(): the payload carries `uuid`.
+     *
+     * Authenticated with the platform token. When `$force` is true or `$allow`
+     * is non-empty the admin token (if configured) is also sent, in the
+     * `X-Gateway-Admin-Token` header, to the configured gateway URL only.
      *
      * @param string $schema_name Schema version to migrate to
      * @param string $uuid Database identifier ("main" or tenant UUID)
      * @param bool $force Bypass DATALOSS safety checks
+     * @param string[] $allow Granular guard overrides (e.g. "drop_column")
      * @return array Gateway response with migration details
      * @throws GatewayException If migration fails
      */
-    public function migrateV2(string $schema_name, string $uuid, bool $force = false): array
+    public function migrateV2(string $schema_name, string $uuid, bool $force = false, array $allow = []): array
     {
         $url = $this->gateway_url . '/v2/migrate';
-        $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force);
+        $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force, $allow);
 
-        $response = $this->httpPost($url, $payload, false, 120);
+        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM, 120, $force || !empty($allow));
         $this->connected = true;
         $this->last_error = null;
 
@@ -286,17 +291,22 @@ class GatewayClient
 
     /**
      * Build the /v2/migrate payload. Extracted (protected) so unit tests can
-     * assert on the exact outgoing payload shape (regression guard for task
-     * #3165) without a live gateway.
+     * assert on the exact outgoing payload shape without a live gateway.
+     *
+     * @param string[] $allow
      */
-    protected function buildMigrateV2Payload(string $schema_name, string $uuid, bool $force): array
+    protected function buildMigrateV2Payload(string $schema_name, string $uuid, bool $force, array $allow = []): array
     {
-        return [
+        $payload = [
             'platform' => $this->platform,
             'schema_name' => $schema_name,
             'uuid' => $uuid,
             'force' => $force,
         ];
+        if (!empty($allow)) {
+            $payload['allow'] = array_values($allow);
+        }
+        return $payload;
     }
 
     /**
@@ -305,11 +315,12 @@ class GatewayClient
      * POST /v2/migrate-all
      *
      * @param string $schema_name Schema version to migrate to
-     * @param bool $force Bypass DATALOSS safety checks
+     * @param bool $force Bypass DATALOSS safety checks (needs the admin token, see migrateV2)
+     * @param string[] $allow Granular guard overrides (needs the admin token, see migrateV2)
      * @return array Gateway response with per-database results
      * @throws GatewayException If migration fails
      */
-    public function migrateAllV2(string $schema_name, bool $force = false): array
+    public function migrateAllV2(string $schema_name, bool $force = false, array $allow = []): array
     {
         $url = $this->gateway_url . '/v2/migrate-all';
 
@@ -318,8 +329,11 @@ class GatewayClient
             'schema_name' => $schema_name,
             'force' => $force,
         ];
+        if (!empty($allow)) {
+            $payload['allow'] = array_values($allow);
+        }
 
-        $response = $this->httpPost($url, $payload, false, 300);
+        $response = $this->httpPost($url, $payload, self::CRED_PLATFORM, 300, $force || !empty($allow));
         $this->connected = true;
         $this->last_error = null;
 
@@ -517,11 +531,13 @@ class GatewayClient
 
     /**
      * Build the Authorization header line, or null when no credential applies.
-     * Admin endpoints prefer the admin token; every other request uses the platform token.
+     *
+     * - CRED_PLATFORM: the platform token.
+     * - CRED_ADMIN_PREFERRED: the admin token when set, else the platform token.
      */
-    protected function buildAuthorizationHeader(bool $with_admin_auth = false): ?string
+    protected function buildAuthorizationHeader(string $credential = self::CRED_PLATFORM): ?string
     {
-        if ($with_admin_auth && $this->admin_token) {
+        if ($credential === self::CRED_ADMIN_PREFERRED && $this->admin_token) {
             return 'Authorization: Bearer ' . $this->admin_token;
         }
         if ($this->platform_token !== null) {
@@ -573,12 +589,13 @@ class GatewayClient
      *
      * @param string $url The URL to post to
      * @param array $data The data to send as JSON
-     * @param bool $with_admin_auth Include admin token in Authorization header
+     * @param string $credential Which credential goes in the Authorization header
      * @param int|null $timeout Override timeout for this request
+     * @param bool $send_admin_header Also send the admin token in X-Gateway-Admin-Token
      * @return array The decoded JSON response
      * @throws GatewayException If the request fails
      */
-    private function httpPost(string $url, #[\SensitiveParameter] array $data, bool $with_admin_auth = false, ?int $timeout = null): array
+    private function httpPost(string $url, #[\SensitiveParameter] array $data, string $credential = self::CRED_PLATFORM, ?int $timeout = null, bool $send_admin_header = false): array
     {
         $json_payload = json_encode($data);
 
@@ -598,9 +615,13 @@ class GatewayClient
             'Content-Length: ' . strlen($json_payload)
         ];
 
-        $auth = $this->buildAuthorizationHeader($with_admin_auth);
+        $auth = $this->buildAuthorizationHeader($credential);
         if ($auth !== null) {
             $headers[] = $auth;
+        }
+        // The admin token goes only to the configured gateway URL.
+        if ($send_admin_header && $this->admin_token && $this->isConfiguredGatewayUrl($url)) {
+            $headers[] = 'X-Gateway-Admin-Token: ' . $this->admin_token;
         }
 
         curl_setopt_array($ch, [
@@ -608,6 +629,7 @@ class GatewayClient
             CURLOPT_POSTFIELDS => $json_payload,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_TIMEOUT => $timeout ?? $this->timeout,
             CURLOPT_CONNECTTIMEOUT => $this->connect_timeout
         ]);
@@ -640,6 +662,14 @@ class GatewayClient
     }
 
     /**
+     * True when `$url` is under the gateway URL this client was configured with.
+     */
+    private function isConfiguredGatewayUrl(string $url): bool
+    {
+        return $url === $this->gateway_url || str_starts_with($url, $this->gateway_url . '/');
+    }
+
+    /**
      * Perform an HTTP POST request with multipart/form-data.
      *
      * @param string $url The URL to post to
@@ -661,7 +691,7 @@ class GatewayClient
             "Content-Type: multipart/form-data; boundary={$boundary}",
             'Content-Length: ' . strlen($body)
         ];
-        $auth = $this->buildAuthorizationHeader(false);
+        $auth = $this->buildAuthorizationHeader(self::CRED_PLATFORM);
         if ($auth !== null) {
             $mp_headers[] = $auth;
         }
@@ -671,6 +701,7 @@ class GatewayClient
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $mp_headers,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => $this->connect_timeout
         ]);
@@ -735,10 +766,19 @@ class GatewayClient
             $message .= ': ' . $ctx['error'];
         }
         $message .= GatewayException::formatSafeSuffix($ctx);
+        $code = is_string($error_body['error'] ?? null) ? $error_body['error'] : '';
         if ($http_code === 401) {
             $message .= ' — the gateway requires a valid platform token (set DB_GATEWAY_PLATFORM_TOKEN)';
         } elseif ($http_code === 403) {
-            $message .= ' — the platform token was not accepted for this platform or request';
+            if ($code === 'platform_isolation_violation') {
+                $message .= ' — the platform token belongs to a different platform than the one named in the request';
+            } elseif ($code === 'admin_scope_required') {
+                $message .= ' — force/allow need the gateway admin token (set DB_GATEWAY_ADMIN_TOKEN)';
+            } elseif ($code === 'unauthorized') {
+                $message .= ' — the gateway does not accept requests from this address (check its ALLOWED_NETWORKS)';
+            } else {
+                $message .= ' — the gateway refused the request';
+            }
         }
 
         return new GatewayException($message, $http_code, null, $error_body);

@@ -16,7 +16,7 @@ class GatewayClientPlatformTokenTest extends TestCase
             public function header(bool $admin): ?string
             {
                 $m = new \ReflectionMethod($this->c, 'buildAuthorizationHeader');
-                return $m->invoke($this->c, $admin);
+                return $m->invoke($this->c, $admin ? 'admin_preferred' : 'platform');
             }
             public function inner(): GatewayClient { return $this->c; }
         };

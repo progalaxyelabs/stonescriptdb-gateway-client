@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.1] - 2026-11-06
+
+Patch. Compatible with gateways before and after 4.9.
+
+### Changed
+- `createDatabase()` authenticates with the platform token (the gateway accepts only platform tokens there).
+- `registerPlatform()` authenticates with the admin token when one is set, otherwise the platform token.
+- `migrateV2()` and `migrateAllV2()` accept an `$allow` list; when `force` is true or `$allow` is non-empty the admin token is sent in `X-Gateway-Admin-Token` (to the configured gateway URL only).
+- Hint text for HTTP 403 distinguishes an address refusal, a token for another platform, and a missing admin scope.
+- Redirects are never followed.
+
 ## [4.1.0] - 2026-11-06
 
 Minor, non-breaking. Opt-in: nothing changes until a platform token is configured.
@@ -12,7 +23,6 @@ Minor, non-breaking. Opt-in: nothing changes until a platform token is configure
 ### Added
 - Optional `platform_token` constructor argument and `setPlatformToken()`: when set, it is sent as
   `Authorization: Bearer <token>` on every gateway request except the health check.
-- Admin endpoints keep using the admin token when one is set, otherwise the platform token.
 - Clear messages for HTTP 401 (token missing/invalid) and 403 (token not accepted for the request).
 - The token is never included in exception messages, `getLastError()` or `var_dump()`/`print_r()` output.
 
