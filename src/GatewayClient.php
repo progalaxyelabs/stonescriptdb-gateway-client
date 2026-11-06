@@ -22,6 +22,7 @@ class GatewayClient
     private ?string $base_schema_name;
     private ?string $tenant_schema_name;
     private ?string $admin_token;
+    private ?string $platform_token = null;
     private bool $connected = false;
     private ?string $last_error = null;
     private int $timeout = 30;
@@ -37,6 +38,7 @@ class GatewayClient
      * @param string|null $tenant_schema_name Tenant schema name (e.g. "tenant"). Required only for multi-tenant platforms.
      * @param string|null $uuid Tenant UUID for tenant databases; null for the base schema
      * @param string|null $admin_token Optional admin token for /admin/* endpoints
+     * @param string|null $platform_token Optional platform token, sent as a Bearer credential on every request except the health check
      */
     public function __construct(
         string $gateway_url,
@@ -44,7 +46,8 @@ class GatewayClient
         ?string $schema_name = null,
         ?string $tenant_schema_name = null,
         ?string $uuid = null,
-        ?string $admin_token = null
+        ?string $admin_token = null,
+        #[\SensitiveParameter] ?string $platform_token = null
     ) {
         if (!extension_loaded('curl')) {
             throw new Exception('GatewayClient requires the curl extension');
@@ -64,6 +67,21 @@ class GatewayClient
         $this->tenant_schema_name = $tenant_schema_name;
         $this->uuid = $uuid;
         $this->admin_token = $admin_token;
+        $this->platform_token = ($platform_token !== null && $platform_token !== '') ? $platform_token : null;
+    }
+
+    /**
+     * Keep credentials out of var_dump()/print_r() output.
+     */
+    public function __debugInfo(): array
+    {
+        $props = get_object_vars($this);
+        foreach (['admin_token', 'platform_token'] as $k) {
+            if ($props[$k] !== null) {
+                $props[$k] = '<redacted>';
+            }
+        }
+        return $props;
     }
 
     /**
@@ -478,6 +496,41 @@ class GatewayClient
     }
 
     /**
+     * Set the platform token sent as `Authorization: Bearer <token>` on gateway requests.
+     *
+     * @param string|null $token Platform token (null or empty disables it)
+     * @return self For method chaining
+     */
+    public function setPlatformToken(#[\SensitiveParameter] ?string $token): self
+    {
+        $this->platform_token = ($token !== null && $token !== '') ? $token : null;
+        return $this;
+    }
+
+    /**
+     * Whether a platform token is configured (the token itself is never exposed).
+     */
+    public function hasPlatformToken(): bool
+    {
+        return $this->platform_token !== null;
+    }
+
+    /**
+     * Build the Authorization header line, or null when no credential applies.
+     * Admin endpoints prefer the admin token; every other request uses the platform token.
+     */
+    protected function buildAuthorizationHeader(bool $with_admin_auth = false): ?string
+    {
+        if ($with_admin_auth && $this->admin_token) {
+            return 'Authorization: Bearer ' . $this->admin_token;
+        }
+        if ($this->platform_token !== null) {
+            return 'Authorization: Bearer ' . $this->platform_token;
+        }
+        return null;
+    }
+
+    /**
      * Set request timeout in seconds.
      *
      * @param int $timeout Timeout in seconds
@@ -545,8 +598,9 @@ class GatewayClient
             'Content-Length: ' . strlen($json_payload)
         ];
 
-        if ($with_admin_auth && $this->admin_token) {
-            $headers[] = 'Authorization: Bearer ' . $this->admin_token;
+        $auth = $this->buildAuthorizationHeader($with_admin_auth);
+        if ($auth !== null) {
+            $headers[] = $auth;
         }
 
         curl_setopt_array($ch, [
@@ -603,14 +657,20 @@ class GatewayClient
             throw new GatewayException('Failed to initialize curl');
         }
 
+        $mp_headers = [
+            "Content-Type: multipart/form-data; boundary={$boundary}",
+            'Content-Length: ' . strlen($body)
+        ];
+        $auth = $this->buildAuthorizationHeader(false);
+        if ($auth !== null) {
+            $mp_headers[] = $auth;
+        }
+
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                "Content-Type: multipart/form-data; boundary={$boundary}",
-                'Content-Length: ' . strlen($body)
-            ],
+            CURLOPT_HTTPHEADER => $mp_headers,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => $this->connect_timeout
         ]);
@@ -675,6 +735,11 @@ class GatewayClient
             $message .= ': ' . $ctx['error'];
         }
         $message .= GatewayException::formatSafeSuffix($ctx);
+        if ($http_code === 401) {
+            $message .= ' — the gateway requires a valid platform token (set DB_GATEWAY_PLATFORM_TOKEN)';
+        } elseif ($http_code === 403) {
+            $message .= ' — the platform token was not accepted for this platform or request';
+        }
 
         return new GatewayException($message, $http_code, null, $error_body);
     }

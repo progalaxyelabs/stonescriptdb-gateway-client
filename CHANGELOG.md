@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-11-06
+
+Minor, non-breaking. Opt-in: nothing changes until a platform token is configured.
+
+### Added
+- Optional `platform_token` constructor argument and `setPlatformToken()`: when set, it is sent as
+  `Authorization: Bearer <token>` on every gateway request except the health check.
+- Admin endpoints keep using the admin token when one is set, otherwise the platform token.
+- Clear messages for HTTP 401 (token missing/invalid) and 403 (token not accepted for the request).
+- The token is never included in exception messages, `getLastError()` or `var_dump()`/`print_r()` output.
+
 ## [4.0.1] - 2026-10-25
 
 Patch: PHP 8.5 compatibility. No behaviour change; still `php >=8.1`.

@@ -451,3 +451,8 @@ catch (GatewayException $e) {
     // $e->getRawCauseForDebug() is debug-only and may contain customer data: never log it.
 }
 ```
+
+## Platform token
+
+Pass the platform token as the 7th constructor argument (or call `setPlatformToken()`); it is sent as
+`Authorization: Bearer <token>` on every gateway request except the health check. Never log it.
