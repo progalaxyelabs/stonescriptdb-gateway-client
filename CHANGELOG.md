@@ -13,7 +13,7 @@ Compatible with gateways before and after 4.10.
 - Deploy-scope token: eighth constructor argument, `setDeployToken()`, `hasDeployToken()`.
 
 ### Changed
-- The credential follows the call type: runtime token for `callFunction` and new tenant databases; deploy token for schema upload, `migrateAllV2`, the main database and existing databases; admin header only for force/allow.
+- The credential follows the call type: runtime token for `callFunction` and tenant database creation; deploy token for schema upload, `migrateAllV2`, the main database, force/allow, and `migrateV2` of a tenant (deploy token when set, else the runtime token, so an application server holding only a runtime token can still bring a brand-new tenant to the schema); admin header only for force/allow.
 - Hint texts for 401/403 name the token that was needed, including `scope_not_permitted`.
 
 ## [4.1.1] - 2026-11-06

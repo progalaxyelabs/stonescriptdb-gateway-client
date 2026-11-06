@@ -11,7 +11,7 @@ use Exception;
  * Works with any PHP application (Laravel, CodeIgniter, Symfony, etc.)
  *
  * @package StoneScriptDB
- * @version 3.0.0
+ * @version 4.2.0
  */
 class GatewayClient
 {
@@ -31,6 +31,8 @@ class GatewayClient
     private const CRED_PLATFORM = 'platform';
     /** Runtime token when set, else the deploy token (new tenant create/migrate). */
     private const CRED_RUNTIME_PREFERRED = 'runtime_preferred';
+    /** Deploy token when set, else the runtime token (tenant migrate: an existing tenant needs the deploy token, a brand-new one works with either). */
+    private const CRED_DEPLOY_PREFERRED = 'deploy_preferred';
     /** Deploy token only (upload, migrate-all, main database, guard overrides). */
     private const CRED_DEPLOY = 'deploy';
     /** Admin token when set, else the deploy token (platform registration). */
@@ -283,10 +285,11 @@ class GatewayClient
      *
      * Same contract as createDatabase(): the payload carries `uuid`.
      *
-     * Migrating a NEW tenant database (`$uuid` given, no force/allow) uses the
-     * runtime token (deploy token if no runtime token is set). Everything else
-     * (the main database, existing databases, force/allow) uses the deploy
-     * token. When `$force` is true or `$allow` is non-empty the admin token (if
+     * Migrating a tenant database (`$uuid` given, no force/allow) uses the
+     * deploy token when one is set (the deploy manager migrating an existing
+     * tenant), else the runtime token (the application server bringing a
+     * brand-new tenant to the schema right after creating it). Everything else
+     * (the main database, force/allow) uses the deploy token. When `$force` is true or `$allow` is non-empty the admin token (if
      * configured) is also sent, in the `X-Gateway-Admin-Token` header, to the
      * configured gateway URL only.
      *
@@ -303,7 +306,7 @@ class GatewayClient
         $payload = $this->buildMigrateV2Payload($schema_name, $uuid, $force, $allow);
 
         $override = $force || !empty($allow);
-        $credential = ($uuid !== null && !$override) ? self::CRED_RUNTIME_PREFERRED : self::CRED_DEPLOY;
+        $credential = ($uuid !== null && !$override) ? self::CRED_DEPLOY_PREFERRED : self::CRED_DEPLOY;
         $response = $this->httpPost($url, $payload, $credential, 120, $override);
         $this->connected = true;
         $this->last_error = null;
@@ -578,6 +581,7 @@ class GatewayClient
      *
      * - CRED_PLATFORM: the runtime token.
      * - CRED_RUNTIME_PREFERRED: the runtime token when set, else the deploy token.
+     * - CRED_DEPLOY_PREFERRED: the deploy token when set, else the runtime token.
      * - CRED_DEPLOY: the deploy token.
      * - CRED_ADMIN_PREFERRED: the admin token when set, else the deploy token.
      */
@@ -586,6 +590,7 @@ class GatewayClient
         $token = match ($credential) {
             self::CRED_PLATFORM => $this->platform_token,
             self::CRED_RUNTIME_PREFERRED => $this->platform_token ?? $this->deploy_token,
+            self::CRED_DEPLOY_PREFERRED => $this->deploy_token ?? $this->platform_token,
             self::CRED_DEPLOY => $this->deploy_token,
             self::CRED_ADMIN_PREFERRED => ($this->admin_token ?: null) ?? $this->deploy_token,
             default => null,
@@ -818,6 +823,7 @@ class GatewayClient
             $message .= match ($credential) {
                 self::CRED_DEPLOY => ' — the gateway requires a valid deploy token (the deploy manager supplies DB_GATEWAY_DEPLOY_TOKEN)',
                 self::CRED_ADMIN_PREFERRED => ' — the gateway requires the admin token or a valid deploy token for this step',
+                self::CRED_DEPLOY_PREFERRED => ' — the gateway requires a valid deploy token, or a runtime token for a newly created tenant database',
                 self::CRED_RUNTIME_PREFERRED => ' — the gateway requires a valid runtime token (set DB_GATEWAY_PLATFORM_TOKEN)',
                 default => ' — the gateway requires a valid platform token (set DB_GATEWAY_PLATFORM_TOKEN)',
             };

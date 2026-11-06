@@ -145,9 +145,18 @@ header("Content-Type: application/json"); echo json_encode(["rows"=>[]]);');
         $this->assertArrayNotHasKey('uuid', $r['body']);
     }
 
-    public function testMigrateNewTenantUsesRuntimeToken(): void
+    public function testMigrateTenantPrefersDeployTokenWhenBothAreSet(): void
     {
+        // an existing tenant migrated by the deploy manager must not use the runtime token (403 outside the window)
         $r = $this->raw($this->client('ptok', 'atok', 'dtok'), 'migrateV2', 'tenant', 'u1');
+        $this->assertSame('Bearer dtok', $r['authorization']);
+        $this->assertNull($r['admin_header']);
+        $this->assertSame('u1', $r['body']['uuid']);
+    }
+
+    public function testMigrateNewTenantOnAnAppServerUsesRuntimeToken(): void
+    {
+        $r = $this->raw($this->client('ptok', null, null), 'migrateV2', 'tenant', 'u1');
         $this->assertSame('Bearer ptok', $r['authorization']);
         $this->assertNull($r['admin_header']);
         $this->assertSame('u1', $r['body']['uuid']);
