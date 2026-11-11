@@ -227,6 +227,29 @@ class GatewayNoLeakTest extends TestCase
         $this->assertNoLeak($e);
     }
 
+    public function testGatewayStructuredFieldsFromRealBody(): void
+    {
+        // body captured from a real gateway /call: unique violation
+        $body = [
+            'error' => 'query_failed',
+            'message' => "Query for function 'create_item' failed",
+            'database' => 'app_main',
+            'cause' => 'duplicate key value violates unique constraint "items_code_key" | DETAIL: Key (code)=(ZZ10086) already exists. | SCHEMA: public | TABLE: items',
+            'sqlstate' => '23505',
+            'constraint' => 'items_code_key',
+            'table' => 'items',
+            'schema' => 'public',
+            'correlation_id' => '42d87b82-97a8-4da7-8243-d06af6c48dc2',
+        ];
+        $e = new GatewayException('x', 500, null, $body);
+        $this->assertSame('23505', $e->getSqlState());
+        $this->assertSame('items_code_key', $e->getConstraint());
+        $this->assertSame('items', $e->getSafeContext()['table'] ?? null);
+        $this->assertSame('public', $e->getSafeContext()['schema'] ?? null);
+        $this->assertSame('42d87b82-97a8-4da7-8243-d06af6c48dc2', $e->getCorrelationId());
+        $this->assertStringNotContainsString('ZZ10086', $e->getMessage());
+    }
+
     public function testRealGatewayShapes(): void
     {
         // shapes captured from a real gateway 4.8.2 against PostgreSQL 15
