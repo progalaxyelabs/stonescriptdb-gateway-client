@@ -239,14 +239,14 @@ class GatewayNoLeakTest extends TestCase
             'constraint' => 'items_code_key',
             'table' => 'items',
             'schema' => 'public',
-            'correlation_id' => '42d87b82-97a8-4da7-8243-d06af6c48dc2',
+            'correlation_id' => 'gw-sgzmifavfpic',
         ];
         $e = new GatewayException('x', 500, null, $body);
         $this->assertSame('23505', $e->getSqlState());
         $this->assertSame('items_code_key', $e->getConstraint());
         $this->assertSame('items', $e->getSafeContext()['table'] ?? null);
         $this->assertSame('public', $e->getSafeContext()['schema'] ?? null);
-        $this->assertSame('42d87b82-97a8-4da7-8243-d06af6c48dc2', $e->getCorrelationId());
+        $this->assertSame('gw-sgzmifavfpic', $e->getCorrelationId());
         $this->assertStringNotContainsString('ZZ10086', $e->getMessage());
     }
 
